@@ -296,6 +296,17 @@ function classifyTrigger(stats){
   return 'watching';
 }
 
+// Compares headache rate during an elimination window against all other logged days.
+function trialStats(logs, trial){
+  const inTrial = d => d>=trial.startDate && (!trial.endDate || d<=trial.endDate);
+  const dates = Object.keys(logs);
+  const trialDates = dates.filter(inTrial);
+  const otherDates = dates.filter(d=>!inTrial(d));
+  const k1 = trialDates.filter(d=>logs[d].headache&&logs[d].headache.had).length;
+  const k0 = otherDates.filter(d=>logs[d].headache&&logs[d].headache.had).length;
+  return { trial: betaPosterior(k1, trialDates.length), baseline: betaPosterior(k0, otherDates.length) };
+}
+
 /* ---------------- Data layer ----------------
    Runs as a normal webpage (GitHub Pages), so real localStorage is reliable —
    same approach as the workout app. Everything lives under one key. */
@@ -303,10 +314,14 @@ const STORAGE_KEY = 'headache_tracker_v1';
 function loadStore(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {logs:{}, watchlist:{}, rotation:{index:0}};
-  }catch(e){ return {logs:{}, watchlist:{}, rotation:{index:0}}; }
+    return raw ? JSON.parse(raw) : {logs:{}, watchlist:{}, rotation:{index:0}, trials:[]};
+  }catch(e){ return {logs:{}, watchlist:{}, rotation:{index:0}, trials:[]}; }
 }
 let STORE = loadStore();
+STORE.trials = STORE.trials || [];
+STORE.watchlist = STORE.watchlist || {};
+STORE.logs = STORE.logs || {};
+STORE.rotation = STORE.rotation || {index:0};
 function persist(){
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(STORE)); return true; }
   catch(e){ console.error('localStorage save failed', e); return false; }
@@ -377,12 +392,15 @@ async function buildWizard(){
   const logs = await getAllLogs();
   const classified = Object.keys(w).map(id => ({id, status: classifyTrigger(triggerStats(logs, id))}));
 
+  const pinned = Object.keys(w).filter(id=>w[id].pinned);
+
   const watching = classified.filter(c=>c.status==='watching'||c.status==='confirmed')
     .map(c=>c.id)
+    .filter(id=>!pinned.includes(id))
     .sort((a,b)=> (w[a].lastAsked||'').localeCompare(w[b].lastAsked||''))
     .slice(0,6);
 
-  const ruledOut = classified.filter(c=>c.status==='ruled_out' && daysAgo(w[c.id].lastAsked||'2000-01-01')>=14)
+  const ruledOut = classified.filter(c=>c.status==='ruled_out' && daysAgo(w[c.id].lastAsked||'2000-01-01')>=14 && !pinned.includes(c.id))
     .slice(0,1).map(c=>c.id);
 
   const rot = await getRotationState();
@@ -395,7 +413,7 @@ async function buildWizard(){
     await saveRotationState({index:(rot.index+2)%unlisted.length});
   }
 
-  const watchIds = [...new Set([...watching, ...ruledOut, ...baseline])];
+  const watchIds = [...new Set([...pinned, ...watching, ...ruledOut, ...baseline])];
 
   const steps = [];
   steps.push({type:'headache'});
@@ -555,12 +573,14 @@ async function renderCheckin(){
   } else if(step.type==='trigger'){
     const item = POOL_MAP[step.id];
     const cur = WIZ.answers.exposures[step.id];
+    const pinned = STORE.watchlist[step.id] && STORE.watchlist[step.id].pinned;
     body = `<p class="qtitle">${item.name}?</p>
       <p class="qhint">Did you have or experience this today</p>
       <div class="pillrow">
         ${pill('No', cur===false, `setExposure('${step.id}',false)`)}
         ${pill('Yes', cur===true, `setExposure('${step.id}',true)`)}
-      </div>`;
+      </div>
+      <p class="qhint" style="margin-top:14px;text-align:center;"><span class="linkbtn" onclick="togglePin('${step.id}')">${pinned? 'Stop asking daily — back to occasional' : 'This happens most days — ask me every day'}</span></p>`;
   } else if(step.type==='recall_gate'){
     if(!WIZ.answers.headache){ WIZ.i++; return renderCheckin(); }
     const selected = new Set(WIZ.answers.recallItems||[]);
@@ -633,6 +653,40 @@ function toggleRecall(id){
   render();
 }
 
+function togglePin(id){
+  if(!STORE.watchlist[id]) STORE.watchlist[id] = {id, name:POOL_MAP[id]?.name||id, added:todayStr(), lastAsked:todayStr()};
+  STORE.watchlist[id].pinned = !STORE.watchlist[id].pinned;
+  persist();
+  render();
+}
+
+let PIN_PICKER_OPEN = false;
+function togglePinPicker(){ PIN_PICKER_OPEN = !PIN_PICKER_OPEN; render(); }
+
+let TRIAL_PICKER_OPEN = false;
+let TRIAL_SELECTION = [];
+function toggleTrialPicker(){ TRIAL_PICKER_OPEN = !TRIAL_PICKER_OPEN; TRIAL_SELECTION = []; render(); }
+function toggleTrialItem(id){
+  const idx = TRIAL_SELECTION.indexOf(id);
+  if(idx>-1) TRIAL_SELECTION.splice(idx,1); else TRIAL_SELECTION.push(id);
+  render();
+}
+function startTrial(){
+  if(TRIAL_SELECTION.length===0) return;
+  STORE.trials.push({ id: Date.now(), itemIds:[...TRIAL_SELECTION], startDate: todayStr(), endDate: null });
+  persist();
+  TRIAL_PICKER_OPEN = false; TRIAL_SELECTION = [];
+  render();
+}
+function endTrial(id){
+  const t = STORE.trials.find(t=>t.id===id);
+  if(t){ t.endDate = todayStr(); persist(); render(); }
+}
+function deleteTrial(id){
+  STORE.trials = STORE.trials.filter(t=>t.id!==id);
+  persist(); render();
+}
+
 async function quickStats(){
   const logs = await getAllLogs();
   const entries = Object.values(logs);
@@ -667,6 +721,49 @@ function onsetTimeSummary(entries){
     <div class="trigrow"><div class="name">Most headaches start around</div><div class="rate">${fmt(median)}</div></div>
     <div class="trigrow"><div class="name">Usual window</div><div class="rate">${fmt(p25)} – ${fmt(p75)}</div></div>
     <p class="qhint" style="margin-top:8px;">Based on ${times.length} logged onset times. Worth checking against your usual lunch, caffeine, and screen-time patterns for that window.</p>
+  </div>`;
+}
+
+function renderPinnedCard(w){
+  const pinnedIds = Object.keys(w).filter(id=>w[id].pinned);
+  const pickerRows = PIN_PICKER_OPEN ? CATS.map(cat=>`<div class="cat">${cat}</div>` + POOL.filter(p=>p.cat===cat).map(p=>
+    `<div class="checkrow ${w[p.id]&&w[p.id].pinned?'checked':''}" onclick="togglePin('${p.id}')"><div class="box"></div>${p.name}</div>`
+  ).join('')).join('') : '';
+  return `<div class="card">
+    <div class="sectionlabel" style="margin-top:0;">Daily items</div>
+    <p class="qhint">Things you have most days get asked every day instead of occasionally, so there's an actual "no" day to compare against.</p>
+    ${pinnedIds.length? pinnedIds.map(id=>`<div class="trigrow"><div class="name">${w[id].name}</div><div class="rate"><span class="linkbtn" onclick="togglePin('${id}')">Unpin</span></div></div>`).join('') : `<div class="empty">Nothing pinned yet.</div>`}
+    <button class="addbtn" onclick="togglePinPicker()">${PIN_PICKER_OPEN? 'Close' : '+ Pin something to daily tracking'}</button>
+    ${PIN_PICKER_OPEN? `<div class="checklist" style="margin-top:10px;">${pickerRows}</div>` : ''}
+  </div>`;
+}
+
+function renderTrialsCard(logs){
+  const trials = STORE.trials.slice().reverse();
+  function trialRow(t){
+    const stats = trialStats(logs, t);
+    const names = t.itemIds.map(id=>POOL_MAP[id]?.name||id).join(' + ');
+    const dayCount = daysBetweenDates(t.startDate, t.endDate||todayStr())+1;
+    const active = !t.endDate;
+    const tr = stats.trial, b = stats.baseline;
+    return `<div class="trigrow" style="align-items:flex-start;flex-direction:column;gap:4px;">
+      <div style="display:flex;justify-content:space-between;width:100%;">
+        <div class="name">${names}</div>
+        <div class="rate">${active? `Day ${dayCount}` : `${dayCount} days, ended`}</div>
+      </div>
+      <div class="qhint" style="margin:0;">${tr.n? Math.round(tr.mean*100)+'% headache rate during':'no data yet'} vs ${b.n? Math.round(b.mean*100)+'% otherwise':'—'}</div>
+      <div>${active? `<span class="linkbtn" onclick="endTrial(${t.id})">End trial</span>` : `<span class="linkbtn" onclick="deleteTrial(${t.id})">Remove</span>`}</div>
+    </div>`;
+  }
+  const pickerRows = TRIAL_PICKER_OPEN ? CATS.map(cat=>`<div class="cat">${cat}</div>` + POOL.filter(p=>p.cat===cat).map(p=>
+    `<div class="checkrow ${TRIAL_SELECTION.includes(p.id)?'checked':''}" onclick="toggleTrialItem('${p.id}')"><div class="box"></div>${p.name}</div>`
+  ).join('')).join('') : '';
+  return `<div class="card">
+    <div class="sectionlabel" style="margin-top:0;">Elimination trials</div>
+    <p class="qhint">Cut something out completely for a stretch and compare your headache rate during that window against everything else logged.</p>
+    ${trials.length? trials.map(trialRow).join('') : `<div class="empty">No trials yet.</div>`}
+    <button class="addbtn" onclick="toggleTrialPicker()">${TRIAL_PICKER_OPEN? 'Close' : '+ Start a trial'}</button>
+    ${TRIAL_PICKER_OPEN? `<div class="checklist" style="margin-top:10px;">${pickerRows}</div><button class="primary" style="margin-top:12px;" onclick="startTrial()" ${TRIAL_SELECTION.length?'':'disabled'}>Start trial with ${TRIAL_SELECTION.length} item${TRIAL_SELECTION.length===1?'':'s'}</button>` : ''}
   </div>`;
 }
 
@@ -720,6 +817,10 @@ async function renderInsights(){
     ${coreFactorLine('Water','glasses', l=>WATER_MAP[l.water])}
     ${coreFactorLine('Caffeine','cups', l=>CAF_MAP[l.caffeine])}
   </div>
+
+  ${renderPinnedCard(w)}
+
+  ${renderTrialsCard(logs)}
 
   <div class="card">
     <div class="sectionlabel">Likely triggers</div>
