@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Headache Log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #EEF0EA;
+    --card: #FFFFFF;
+    --ink: #232821;
+    --ink-soft: #5B6259;
+    --accent: #2F5D50;
+    --accent-soft: #DCE6DF;
+    --alert: #8B3A3A;
+    --alert-soft: #F3E1DD;
+    --line: #D8DCCF;
+    --amber: #A67C2E;
+    --amber-soft: #F1E7D2;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle, rgba(47,93,80,0.08) 1px, transparent 1px) 0 0/22px 22px,
+      var(--bg);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+    padding-bottom:84px;
+  }
+  h1,h2,h3,.serif{font-family:'Newsreader',serif;}
+  .app{max-width:520px;margin:0 auto;padding:20px 16px 8px;}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px;}
+  header.top h1{font-size:1.5rem;font-weight:600;margin:0;color:var(--ink);}
+  header.top .date{font-size:0.85rem;color:var(--ink-soft);}
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:20px;
+    margin-bottom:14px;
+  }
+  .progress{display:flex;gap:5px;margin-bottom:18px;}
+  .progress .dot{flex:1;height:4px;border-radius:2px;background:var(--line);}
+  .progress .dot.done{background:var(--accent);}
+  .progress .dot.current{background:var(--amber);}
+  .qtitle{font-family:'Newsreader',serif;font-size:1.25rem;font-weight:500;margin:0 0 4px;line-height:1.3;}
+  .qhint{font-size:0.85rem;color:var(--ink-soft);margin:0 0 16px;}
+  .pillrow{display:flex;flex-wrap:wrap;gap:8px;}
+  .pill{
+    border:1.5px solid var(--line);
+    background:#fff;
+    border-radius:10px;
+    padding:11px 16px;
+    font-size:0.95rem;
+    font-family:'Inter',sans-serif;
+    color:var(--ink);
+    cursor:pointer;
+    flex:1 1 auto;
+    text-align:center;
+    min-width:64px;
+    transition:border-color .15s, background .15s;
+  }
+  .pill.selected{border-color:var(--accent);background:var(--accent-soft);font-weight:600;}
+  .pill.alert-selected{border-color:var(--alert);background:var(--alert-soft);font-weight:600;}
+  .pill.small{padding:9px 10px;font-size:0.88rem;flex:0 0 auto;}
+  .scale{display:flex;gap:6px;}
+  .scale .pill{flex:1;padding:10px 0;}
+  .navrow{display:flex;justify-content:space-between;align-items:center;margin-top:22px;gap:10px;}
+  button.primary{
+    background:var(--accent);color:#fff;border:none;border-radius:10px;
+    padding:12px 22px;font-size:0.95rem;font-weight:600;font-family:'Inter',sans-serif;
+    cursor:pointer;flex:1;
+  }
+  button.primary:disabled{opacity:0.4;cursor:default;}
+  button.ghost{
+    background:none;border:none;color:var(--ink-soft);font-size:0.9rem;
+    cursor:pointer;padding:12px 8px;font-family:'Inter',sans-serif;
+  }
+  .checklist{display:flex;flex-direction:column;gap:0;}
+  .checklist .cat{font-size:0.78rem;text-transform:none;color:var(--ink-soft);margin:14px 0 6px;font-weight:600;}
+  .checklist .cat:first-child{margin-top:0;}
+  .checkrow{
+    display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line);
+    cursor:pointer;font-size:0.93rem;
+  }
+  .checkrow:last-child{border-bottom:none;}
+  .checkrow .box{width:19px;height:19px;border:1.5px solid var(--line);border-radius:5px;flex-shrink:0;position:relative;}
+  .checkrow.checked .box{background:var(--accent);border-color:var(--accent);}
+  .checkrow.checked .box::after{content:'';position:absolute;left:5px;top:2px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);}
+  textarea{
+    width:100%;border:1.5px solid var(--line);border-radius:10px;padding:12px;
+    font-family:'Inter',sans-serif;font-size:0.93rem;resize:vertical;min-height:70px;
+  }
+  .summarybox{border:1px dashed var(--line);border-radius:10px;padding:14px;margin-top:14px;font-size:0.88rem;color:var(--ink-soft);}
+  .summarybox b{color:var(--ink);}
+  .flag{display:inline-block;font-size:0.75rem;padding:2px 8px;border-radius:20px;margin-left:6px;font-weight:600;}
+  .flag.watching{background:var(--amber-soft);color:var(--amber);}
+  .flag.confirmed{background:var(--alert-soft);color:var(--alert);}
+  .flag.ruled_out{background:var(--accent-soft);color:var(--accent);}
+  nav.tabs{
+    position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--line);
+    display:flex;max-width:520px;margin:0 auto;
+  }
+  nav.tabs button{
+    flex:1;background:none;border:none;padding:12px 0 10px;font-family:'Inter',sans-serif;
+    font-size:0.78rem;color:var(--ink-soft);cursor:pointer;
+  }
+  nav.tabs button.active{color:var(--accent);font-weight:600;}
+  .statgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;}
+  .stat .n{font-family:'Newsreader',serif;font-size:1.7rem;font-weight:600;}
+  .stat .l{font-size:0.78rem;color:var(--ink-soft);}
+  .trigrow{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);}
+  .trigrow:last-child{border-bottom:none;}
+  .trigrow .name{font-size:0.92rem;}
+  .trigrow .rate{font-size:0.8rem;color:var(--ink-soft);}
+  .sectionlabel{font-size:0.95rem;font-weight:600;margin:20px 0 6px;font-family:'Newsreader',serif;}
+  .empty{color:var(--ink-soft);font-size:0.88rem;padding:10px 0;}
+  .addbtn{width:100%;border:1.5px dashed var(--line);background:none;border-radius:10px;padding:10px;color:var(--ink-soft);font-family:'Inter',sans-serif;cursor:pointer;margin-top:6px;}
+  .toprow{display:flex;justify-content:space-between;align-items:center;}
+  .linkbtn{background:none;border:none;color:var(--accent);font-size:0.85rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;}
+  .histentry{padding:10px 0;border-bottom:1px solid var(--line);font-size:0.88rem;display:flex;justify-content:space-between;}
+  .histentry .d{color:var(--ink-soft);}
+  input[type=text]{width:100%;border:1.5px solid var(--line);border-radius:10px;padding:11px;font-family:'Inter',sans-serif;font-size:0.93rem;}
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+
+<nav class="tabs">
+  <button id="tab-checkin" onclick="setTab('checkin')">Check-in</button>
+  <button id="tab-insights" onclick="setTab('insights')">Patterns</button>
+  <button id="tab-history" onclick="setTab('history')">History</button>
+</nav>
+
+<script>
+/* ---------------- Trigger pool ---------------- */
+const POOL = [
+  {id:'chocolate', name:'Chocolate', cat:'Food'},
+  {id:'aged_cheese', name:'Aged cheese', cat:'Food'},
+  {id:'cured_meat', name:'Cured / processed meat', cat:'Food'},
+  {id:'msg', name:'MSG / savory seasoning packets', cat:'Food'},
+  {id:'artificial_sweetener', name:'Artificial sweetener', cat:'Food'},
+  {id:'citrus', name:'Citrus fruit', cat:'Food'},
+  {id:'nuts', name:'Nuts', cat:'Food'},
+  {id:'fermented', name:'Fermented food (kimchi, sauerkraut, soy sauce)', cat:'Food'},
+  {id:'oily_fish', name:'Oily fish (sardines, mackerel, anchovies)', cat:'Food'},
+  {id:'onions', name:'Onions', cat:'Food'},
+  {id:'tomatoes', name:'Tomatoes', cat:'Food'},
+  {id:'wheat', name:'Wheat / gluten', cat:'Food'},
+  {id:'dairy', name:'Dairy', cat:'Food'},
+  {id:'skipped_meal', name:'Skipped a meal', cat:'Food'},
+  {id:'more_caffeine', name:'More caffeine than usual', cat:'Drink'},
+  {id:'less_caffeine', name:'Less caffeine than usual', cat:'Drink'},
+  {id:'energy_drink', name:'Energy drink', cat:'Drink'},
+  {id:'perfume', name:'Strong perfume / fragrance exposure', cat:'Environment'},
+  {id:'bright_light', name:'Bright or flickering light', cat:'Environment'},
+  {id:'loud_noise', name:'Loud noise', cat:'Environment'},
+  {id:'screen_glare', name:'Screen glare / eye strain', cat:'Environment'},
+  {id:'weather_change', name:'Weather / pressure change', cat:'Environment'},
+  {id:'heat', name:'Extreme heat', cat:'Environment'},
+  {id:'travel', name:'Travel / flight', cat:'Environment'},
+  {id:'posture', name:'Long stretch at a desk / poor posture', cat:'Lifestyle'},
+  {id:'neck_strain', name:'Neck or shoulder strain', cat:'Lifestyle'},
+  {id:'intense_exercise', name:'Unusually intense exercise', cat:'Lifestyle'},
+  {id:'hormone_change', name:'Hormone dose change or missed dose', cat:'Lifestyle'},
+];
+const POOL_MAP = Object.fromEntries(POOL.map(p=>[p.id,p]));
+const CATS = ['Food','Drink','Environment','Lifestyle'];
+
+/* ---------------- Data layer ----------------
+   Runs as a normal webpage (GitHub Pages), so real localStorage is reliable —
+   same approach as the workout app. Everything lives under one key. */
+const STORAGE_KEY = 'headache_tracker_v1';
+function loadStore(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {logs:{}, watchlist:{}, rotation:{index:0}};
+  }catch(e){ return {logs:{}, watchlist:{}, rotation:{index:0}}; }
+}
+let STORE = loadStore();
+function persist(){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(STORE)); return true; }
+  catch(e){ console.error('localStorage save failed', e); return false; }
+}
+async function getWatchlist(){ return STORE.watchlist; }
+async function saveWatchlist(w){ STORE.watchlist = w; return persist(); }
+async function getAllLogs(){ return STORE.logs; }
+async function getRotationState(){ return STORE.rotation; }
+async function saveRotationState(s){ STORE.rotation = s; persist(); }
+
+function todayStr(d=new Date()){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function daysAgo(dateStr){
+  const d1 = new Date(dateStr+'T00:00:00'), d2 = new Date(todayStr()+'T00:00:00');
+  return Math.round((d2-d1)/86400000);
+}
+
+/* ---------------- Backup export / import (optional — for switching devices or extra safety) ---------------- */
+function exportBackup(){
+  const payload = { version:1, exportedAt: new Date().toISOString(), logs: STORE.logs, watchlist: STORE.watchlist, rotation: STORE.rotation };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'headache-backup-'+todayStr()+'.json';
+  a.click();
+}
+function triggerImport(){ document.getElementById('backupFileInput').click(); }
+function importBackup(input){
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    try{
+      const data = JSON.parse(e.target.result);
+      if(!confirm('This will replace what is currently stored on this device with the backup file. Continue?')) return;
+      STORE.logs = data.logs || {};
+      STORE.watchlist = data.watchlist || {};
+      STORE.rotation = data.rotation || {index:0};
+      persist();
+      WIZ = null;
+      render();
+    }catch(err){
+      alert('That file could not be read as a backup. Make sure it is the JSON file this app exported.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ---------------- App state ---------------- */
+let TAB = 'checkin';
+let LOGS = {};
+let WATCHLIST = {};
+let WIZ = null; // wizard state
+
+function setTab(t){ TAB = t; render(); }
+
+/* ---------------- Wizard construction ---------------- */
+async function buildWizard(){
+  const w = await getWatchlist();
+  const watching = Object.entries(w).filter(([id,v])=>v.status==='watching'||v.status==='confirmed')
+    .sort((a,b)=> (a[1].lastAsked||'').localeCompare(b[1].lastAsked||''))
+    .slice(0,6).map(([id])=>id);
+
+  const ruledOut = Object.entries(w).filter(([id,v])=>v.status==='ruled_out' && daysAgo(v.lastAsked||'2000-01-01')>=14)
+    .slice(0,1).map(([id])=>id);
+
+  const rot = await getRotationState();
+  const unlisted = POOL.filter(p=>!w[p.id]);
+  let baseline = [];
+  if(unlisted.length){
+    for(let i=0;i<Math.min(2,unlisted.length);i++){
+      baseline.push(unlisted[(rot.index+i)%unlisted.length].id);
+    }
+    await saveRotationState({index:(rot.index+2)%unlisted.length});
+  }
+
+  const watchIds = [...new Set([...watching, ...ruledOut, ...baseline])];
+
+  const steps = [];
+  steps.push({type:'headache'});
+  steps.push({type:'sleep'});
+  steps.push({type:'stress'});
+  steps.push({type:'water'});
+  steps.push({type:'caffeine'});
+  watchIds.forEach(id=> steps.push({type:'trigger', id}));
+  steps.push({type:'recall_gate'}); // shown only if headache=yes, else auto-skipped
+  steps.push({type:'notes'});
+  steps.push({type:'done'});
+  return steps;
+}
+
+async function startCheckin(){
+  const steps = await buildWizard();
+  WIZ = { steps, i:0, answers:{ exposures:{} } };
+  TAB = 'checkin';
+  render();
+}
+
+function currentStep(){ return WIZ.steps[WIZ.i]; }
+
+function goNext(){
+  if(WIZ.i < WIZ.steps.length-1){ WIZ.i++; render(); }
+}
+function goBack(){ if(WIZ.i>0){ WIZ.i--; render(); } }
+
+async function finishCheckin(){
+  const date = todayStr();
+  const a = WIZ.answers;
+  const log = {
+    date,
+    headache: a.headache ? {had:true, severity:a.severity||5, duration:a.duration||'unknown'} : {had:false},
+    sleepScore: a.sleepScore,
+    stress: a.stress, water: a.water, caffeine: a.caffeine, caffeineChange: a.caffeineChange,
+    exposures: a.exposures,
+    notes: a.notes || ''
+  };
+
+  // Update watchlist based on exposures asked this session
+  const w = await getWatchlist();
+  const changes = [];
+  for(const [id, exposed] of Object.entries(a.exposures)){
+    if(exposed === null || exposed === undefined) continue;
+    if(!w[id]) w[id] = {id, name:POOL_MAP[id]?.name||id, status:'watching', withHeadache:0, withoutHeadache:0, totalAsked:0, lastAsked:date, added:date};
+    w[id].lastAsked = date;
+    w[id].totalAsked++;
+    if(exposed){
+      if(log.headache.had) w[id].withHeadache++; else w[id].withoutHeadache++;
+    }
+  }
+  // Add any new items from expanded recall not yet on watchlist
+  (a.recallItems||[]).forEach(id=>{
+    if(!w[id]) w[id] = {id, name:POOL_MAP[id]?.name||id, status:'watching', withHeadache:1, withoutHeadache:0, totalAsked:1, lastAsked:date, added:date};
+    a.exposures[id] = true;
+  });
+
+  // Re-run status logic
+  for(const id of Object.keys(w)){
+    const item = w[id];
+    const exposedTotal = item.withHeadache + item.withoutHeadache;
+    if(exposedTotal >= 4 && item.withHeadache <= 1){
+      if(item.status !== 'ruled_out'){ item.status = 'ruled_out'; changes.push(item.name+' looks unlikely as a trigger — moved off daily tracking.'); }
+    } else if(exposedTotal >= 3 && (item.withHeadache/exposedTotal) >= 0.6){
+      if(item.status !== 'confirmed'){ item.status = 'confirmed'; changes.push(item.name+' is showing a real pattern with your headaches.'); }
+    } else if(item.status === 'ruled_out' && exposedTotal < 4){
+      item.status = 'watching';
+    }
+  }
+  const watchlistOk = await saveWatchlist(w);
+  STORE.logs[date] = {...log, exposures:a.exposures};
+  const logOk = persist();
+
+  WIZ.savedChanges = changes;
+  WIZ.saveFailed = !(watchlistOk && logOk);
+  WIZ.i = WIZ.steps.length-1; // jump to done
+  render();
+}
+
+/* ---------------- Rendering ---------------- */
+function pill(label, selected, onclick, extraClass=''){
+  return `<div class="pill ${selected?('selected '+extraClass):''}" onclick="${onclick}">${label}</div>`;
+}
+
+async function render(){
+  const app = document.getElementById('app');
+  document.getElementById('tab-checkin').classList.toggle('active', TAB==='checkin');
+  document.getElementById('tab-insights').classList.toggle('active', TAB==='insights');
+  document.getElementById('tab-history').classList.toggle('active', TAB==='history');
+
+  if(TAB==='checkin'){ app.innerHTML = await renderCheckin(); }
+  else if(TAB==='insights'){ app.innerHTML = await renderInsights(); }
+  else { app.innerHTML = await renderHistory(); }
+}
+
+async function renderCheckin(){
+  const today = todayStr();
+  if(!WIZ){
+    const existing = STORE.logs[today] || null;
+    let head = `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header>`;
+    if(existing){
+      return head + `<div class="card"><p class="qtitle">Already logged today</p>
+        <p class="qhint">You checked in for today${existing.headache.had?' — headache noted.':' — no headache noted.'}</p>
+        <button class="primary" onclick="startCheckin()">Log again / edit</button></div>` + await quickStats();
+    }
+    return head + `<div class="card"><p class="qtitle">Evening check-in</p>
+      <p class="qhint">About 3 minutes. A handful of quick taps — no typing required.</p>
+      <button class="primary" onclick="startCheckin()">Start check-in</button></div>` + await quickStats();
+  }
+
+  const step = currentStep();
+  const total = WIZ.steps.length;
+  const dots = WIZ.steps.map((s,idx)=>`<div class="dot ${idx<WIZ.i?'done':idx===WIZ.i?'current':''}"></div>`).join('');
+  let body = '';
+
+  if(step.type==='headache'){
+    body = `<p class="qtitle">Did you have a headache today?</p>
+      <div class="pillrow">
+        ${pill('No', WIZ.answers.headache===false, `setHeadache(false)`)}
+        ${pill('Yes', WIZ.answers.headache===true, `setHeadache(true)`,'alert-selected')}
+      </div>`;
+    if(WIZ.answers.headache===true){
+      body += `<p class="qtitle" style="margin-top:22px;font-size:1.05rem;">How severe, 1–10?</p>
+        <div class="pillrow">${[1,2,3,4,5,6,7,8,9,10].map(n=>pill(n, WIZ.answers.severity===n, `setSeverity(${n})`)).join('')}</div>
+        <p class="qtitle" style="margin-top:18px;font-size:1.05rem;">About how long did it last?</p>
+        <div class="pillrow">
+          ${['Under 1h','1–4h','4–12h','All day'].map(d=>pill(d, WIZ.answers.duration===d, `setDuration('${d}')`)).join('')}
+        </div>`;
+    }
+  } else if(step.type==='sleep'){
+    body = `<p class="qtitle">Sleep score last night?</p>
+      <p class="qhint">From your Apple Watch / Health app (0–100)</p>
+      <input type="number" inputmode="numeric" min="0" max="100" placeholder="e.g. 93" id="sleepScoreInput"
+        value="${WIZ.answers.sleepScore??''}"
+        oninput="WIZ.answers.sleepScore = this.value===''?undefined:Math.max(0,Math.min(100,parseInt(this.value)||0)); enableNextIfReady();"
+        style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:12px;font-family:'Inter',sans-serif;font-size:1.4rem;text-align:center;">`;
+  } else if(step.type==='stress'){
+    body = `<p class="qtitle">Stress level today?</p><p class="qhint">1 = calm, 5 = very stressed</p>
+      <div class="scale">${[1,2,3,4,5].map(n=>pill(n, WIZ.answers.stress===n, `setAns('stress',${n})`)).join('')}</div>`;
+  } else if(step.type==='water'){
+    body = `<p class="qtitle">Glasses of water today?</p>
+      <div class="pillrow">${['0–1','2–3','4–5','6+'].map(v=>pill(v, WIZ.answers.water===v, `setAns('water','${v}')`)).join('')}</div>`;
+  } else if(step.type==='caffeine'){
+    body = `<p class="qtitle">Caffeine today?</p>
+      <div class="pillrow">${['0 cups','1 cup','2 cups','3 cups','4+ cups'].map(v=>pill(v, WIZ.answers.caffeine===v, `setAns('caffeine','${v}')`)).join('')}</div>
+      <p class="qtitle" style="margin-top:18px;font-size:1.05rem;">Compared to usual?</p>
+      <div class="pillrow">${['Less than usual','Usual','More than usual'].map(v=>pill(v, WIZ.answers.caffeineChange===v, `setAns('caffeineChange','${v}')`)).join('')}</div>`;
+  } else if(step.type==='trigger'){
+    const item = POOL_MAP[step.id];
+    const cur = WIZ.answers.exposures[step.id];
+    body = `<p class="qtitle">${item.name}?</p>
+      <p class="qhint">Did you have or experience this today</p>
+      <div class="pillrow">
+        ${pill('No', cur===false, `setExposure('${step.id}',false)`)}
+        ${pill('Yes', cur===true, `setExposure('${step.id}',true)`)}
+      </div>`;
+  } else if(step.type==='recall_gate'){
+    if(!WIZ.answers.headache){ WIZ.i++; return renderCheckin(); }
+    const selected = new Set(WIZ.answers.recallItems||[]);
+    body = `<p class="qtitle">What might have contributed?</p>
+      <p class="qhint">Check anything from today (or the day before) that stood out. This helps narrow down what to track for you.</p>
+      <div class="checklist">
+      ${CATS.map(cat=>`<div class="cat">${cat}</div>` + POOL.filter(p=>p.cat===cat).map(p=>
+        `<div class="checkrow ${selected.has(p.id)?'checked':''}" onclick="toggleRecall('${p.id}')"><div class="box"></div>${p.name}</div>`
+      ).join('')).join('')}
+      </div>`;
+  } else if(step.type==='notes'){
+    body = `<p class="qtitle">Anything else worth noting?</p>
+      <p class="qhint">Optional — skip if nothing comes to mind.</p>
+      <textarea id="notesInput" oninput="WIZ.answers.notes=this.value">${WIZ.answers.notes||''}</textarea>`;
+  } else if(step.type==='done'){
+    const changes = WIZ.savedChanges || [];
+    if(WIZ.saveFailed){
+      body = `<p class="qtitle" style="color:var(--alert);">Save didn't go through</p>
+        <p class="qhint">Your browser's local storage blocked the save (this can happen in private/incognito mode, or if storage is full). Download a backup so nothing's lost, then check your browser settings.</p>
+        <button class="primary" style="margin-top:10px;" onclick="exportBackup()">Download backup</button>`;
+      return `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header><div class="card">${body}</div>`;
+    }
+    body = `<p class="qtitle">Logged for ${today} ✓</p>
+      <p class="qhint">${WIZ.answers.headache ? 'Sorry you had a headache today.' : 'No headache — good.'} Thanks for taking three minutes for this. Saved automatically on this device.</p>
+      ${changes.length? `<div class="summarybox">${changes.map(c=>`<div>• ${c}</div>`).join('')}</div>` : ''}
+      <button class="primary" style="margin-top:18px;" onclick="WIZ=null;setTab('checkin')">Done</button>`;
+    return `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header>${body}`;
+  }
+
+  const canAdvance = stepIsAnswered(step);
+  const isLast = step.type==='notes';
+  return `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header>
+    <div class="card">
+      <div class="progress">${dots}</div>
+      ${body}
+      <div class="navrow">
+        <button class="ghost" onclick="${WIZ.i===0?'WIZ=null;render()':'goBack()'}">${WIZ.i===0?'Cancel':'Back'}</button>
+        <button class="primary" ${canAdvance?'':'disabled'} onclick="${isLast? 'finishCheckin()' : 'goNext()'}">${isLast?'Save':'Next'}</button>
+      </div>
+    </div>`;
+}
+
+function stepIsAnswered(step){
+  const a = WIZ.answers;
+  if(step.type==='headache') return a.headache===false || (a.headache===true && a.severity && a.duration);
+  if(step.type==='sleep') return a.sleepScore!==undefined && a.sleepScore!==null;
+  if(step.type==='stress') return !!a.stress;
+  if(step.type==='water') return !!a.water;
+  if(step.type==='caffeine') return a.caffeine && a.caffeineChange;
+  if(step.type==='trigger') return a.exposures[step.id]!==undefined;
+  if(step.type==='recall_gate') return true;
+  if(step.type==='notes') return true;
+  return true;
+}
+
+function setHeadache(v){ WIZ.answers.headache=v; render(); }
+function setSeverity(n){ WIZ.answers.severity=n; render(); }
+function setDuration(d){ WIZ.answers.duration=d; render(); }
+function setAns(k,v){ WIZ.answers[k]=v; render(); }
+function enableNextIfReady(){
+  const btns = document.querySelectorAll('.navrow .primary');
+  const btn = btns[btns.length-1];
+  if(btn) btn.disabled = !stepIsAnswered(currentStep());
+}
+function setExposure(id,v){ WIZ.answers.exposures[id]=v; render(); }
+function toggleRecall(id){
+  if(!WIZ.answers.recallItems) WIZ.answers.recallItems=[];
+  const arr = WIZ.answers.recallItems;
+  const idx = arr.indexOf(id);
+  if(idx>-1) arr.splice(idx,1); else arr.push(id);
+  render();
+}
+
+async function quickStats(){
+  const logs = await getAllLogs();
+  const entries = Object.values(logs);
+  const total = entries.length;
+  const withH = entries.filter(l=>l.headache && l.headache.had).length;
+  if(total===0) return '';
+  return `<div class="statgrid">
+    <div class="stat"><div class="n">${total}</div><div class="l">days logged</div></div>
+    <div class="stat"><div class="n">${total? Math.round(withH/total*100):0}%</div><div class="l">headache days</div></div>
+  </div>`;
+}
+
+/* ---------------- Insights ---------------- */
+async function renderInsights(){
+  const logs = await getAllLogs();
+  const entries = Object.values(logs);
+  const w = await getWatchlist();
+  const total = entries.length;
+  const withH = entries.filter(l=>l.headache && l.headache.had).length;
+  const baseRate = total? withH/total : 0;
+
+  const confirmed = Object.values(w).filter(i=>i.status==='confirmed');
+  const watching = Object.values(w).filter(i=>i.status==='watching');
+  const ruledOut = Object.values(w).filter(i=>i.status==='ruled_out');
+
+  function rateLine(item){
+    const exposedTotal = item.withHeadache+item.withoutHeadache;
+    const rate = exposedTotal? Math.round(item.withHeadache/exposedTotal*100) : 0;
+    return `<div class="trigrow"><div class="name">${item.name}</div><div class="rate">${rate}% of ${exposedTotal}× <span class="flag ${item.status}">${item.status.replace('_',' ')}</span></div></div>`;
+  }
+
+  const WATER_MAP = {'0–1':0.5,'2–3':2.5,'4–5':4.5,'6+':6};
+  const CAF_MAP = {'0 cups':0,'1 cup':1,'2 cups':2,'3 cups':3,'4+ cups':4};
+
+  function coreFactorLine(label, unit, extractNum){
+    const hVals = entries.filter(l=>l.headache&&l.headache.had).map(extractNum).filter(v=>v!==undefined&&v!==null);
+    const nVals = entries.filter(l=>!(l.headache&&l.headache.had)).map(extractNum).filter(v=>v!==undefined&&v!==null);
+    if(hVals.length<3 || nVals.length<3) return `<div class="trigrow"><div class="name">${label}</div><div class="rate">need more data</div></div>`;
+    const avg = arr=> (arr.reduce((a,b)=>a+b,0)/arr.length);
+    const hAvg = avg(hVals), nAvg = avg(nVals);
+    return `<div class="trigrow"><div class="name">${label}</div><div class="rate">${hAvg.toFixed(1)}${unit} on headache days vs ${nAvg.toFixed(1)}${unit} otherwise</div></div>`;
+  }
+
+  return `<header class="top"><h1>Patterns</h1></header>
+  <div class="statgrid">
+    <div class="stat"><div class="n">${total}</div><div class="l">days logged</div></div>
+    <div class="stat"><div class="n">${Math.round(baseRate*100)}%</div><div class="l">baseline headache rate</div></div>
+  </div>
+
+  <div class="card">
+    <div class="sectionlabel">Daily factors</div>
+    ${coreFactorLine('Sleep score','', l=>l.sleepScore)}
+    ${coreFactorLine('Stress (1–5)','', l=>l.stress)}
+    ${coreFactorLine('Water','glasses', l=>WATER_MAP[l.water])}
+    ${coreFactorLine('Caffeine','cups', l=>CAF_MAP[l.caffeine])}
+  </div>
+
+  <div class="card">
+    <div class="sectionlabel">Likely triggers</div>
+    ${confirmed.length? confirmed.map(rateLine).join('') : `<div class="empty">None flagged yet — keep logging. Usually needs a handful of data points.</div>`}
+
+    <div class="sectionlabel">Still watching</div>
+    ${watching.length? watching.map(rateLine).join('') : `<div class="empty">Nothing actively being watched right now.</div>`}
+
+    <div class="sectionlabel">Ruled out</div>
+    ${ruledOut.length? ruledOut.map(rateLine).join('') : `<div class="empty">Nothing ruled out yet.</div>`}
+
+    <button class="addbtn" onclick="promptAddTrigger()">+ Add something to watch manually</button>
+  </div>
+  <p class="qhint" style="padding:0 4px;">These are correlations from your own data, not proof of cause — but a repeated pattern across many entries is worth paying attention to and raising with whoever manages your headache care.</p>
+  `;
+}
+
+async function promptAddTrigger(){
+  const name = prompt('What would you like to start watching? (e.g. "almonds", "flying")');
+  if(!name) return;
+  const id = 'custom_'+name.toLowerCase().replace(/[^a-z0-9]+/g,'_').slice(0,30)+'_'+Date.now();
+  POOL_MAP[id] = {id, name, cat:'Food'};
+  const w = await getWatchlist();
+  w[id] = {id, name, status:'watching', withHeadache:0, withoutHeadache:0, totalAsked:0, lastAsked:'2000-01-01', added:todayStr(), custom:true};
+  await saveWatchlist(w);
+  render();
+}
+
+/* ---------------- History ---------------- */
+async function renderHistory(){
+  const logs = await getAllLogs();
+  const dates = Object.keys(logs).sort().reverse();
+  return `<header class="top"><h1>History</h1></header>
+  <div class="card">
+    <div class="sectionlabel" style="margin-top:0;">Backup</div>
+    <p class="qhint">Your data saves automatically on this device. Use this only if you want a safety-net copy or to move your history to another device/browser.</p>
+    <div class="pillrow">
+      <div class="pill" onclick="exportBackup()">Download backup (.json)</div>
+      <div class="pill" onclick="triggerImport()">Import backup</div>
+    </div>
+    <input type="file" id="backupFileInput" accept="application/json" style="display:none" onchange="importBackup(this)">
+    <div class="sectionlabel">Export as spreadsheet</div>
+    <p class="qhint">A read-only CSV, handy for your own analysis — not used to restore data.</p>
+    <button class="addbtn" onclick="exportCSV()">Export CSV</button>
+  </div>
+  <div class="card">
+    <div class="sectionlabel" style="margin-top:0;">Entries</div>
+    ${dates.length? dates.map(d=>{
+      const l = logs[d];
+      return `<div class="histentry"><span class="d">${d}</span><span>${l.headache&&l.headache.had? '⚠ headache ('+(l.headache.severity||'')+'/10)' : 'no headache'}</span></div>`;
+    }).join('') : `<div class="empty">No entries yet.</div>`}
+  </div>`;
+}
+
+async function exportCSV(){
+  const logs = await getAllLogs();
+  const w = await getWatchlist();
+  const trigIds = Object.keys(w);
+  const headers = ['date','headache','severity','duration','sleepScore','stress','water','caffeine','caffeineChange',...trigIds,'notes'];
+  const rows = [headers.join(',')];
+  Object.keys(logs).sort().forEach(d=>{
+    const l = logs[d];
+    const row = [
+      d, l.headache&&l.headache.had?'yes':'no', l.headache&&l.headache.severity||'', l.headache&&l.headache.duration||'',
+      l.sleepScore??'', l.stress||'', l.water||'', l.caffeine||'', l.caffeineChange||'',
+      ...trigIds.map(id=> l.exposures && l.exposures[id]===true?'yes': l.exposures && l.exposures[id]===false?'no':''),
+      `"${(l.notes||'').replace(/"/g,'""')}"`
+    ];
+    rows.push(row.join(','));
+  });
+  const blob = new Blob([rows.join('\n')], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'headache-log.csv';
+  a.click();
+}
+
+render();
+</script>
+</body>
+</html>
