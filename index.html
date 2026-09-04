@@ -156,7 +156,6 @@ const POOL = [
   {id:'skipped_meal', name:'Skipped a meal', cat:'Food'},
   {id:'more_caffeine', name:'More caffeine than usual', cat:'Drink'},
   {id:'less_caffeine', name:'Less caffeine than usual', cat:'Drink'},
-  {id:'energy_drink', name:'Energy drink', cat:'Drink'},
   {id:'perfume', name:'Strong perfume / fragrance exposure', cat:'Environment'},
   {id:'bright_light', name:'Bright or flickering light', cat:'Environment'},
   {id:'loud_noise', name:'Loud noise', cat:'Environment'},
@@ -168,9 +167,134 @@ const POOL = [
   {id:'neck_strain', name:'Neck or shoulder strain', cat:'Lifestyle'},
   {id:'intense_exercise', name:'Unusually intense exercise', cat:'Lifestyle'},
   {id:'hormone_change', name:'Hormone dose change or missed dose', cat:'Lifestyle'},
+  {id:'jaw_clenching', name:'Jaw clenching / TMJ tension', cat:'Lifestyle'},
+  {id:'pain_reliever', name:'Took a pain reliever (any headache/pain medication)', cat:'Lifestyle'},
 ];
 const POOL_MAP = Object.fromEntries(POOL.map(p=>[p.id,p]));
 const CATS = ['Food','Drink','Environment','Lifestyle'];
+// Interleave categories (Food, Drink, Environment, Lifestyle, Food, Drink...) so the
+// rotation samples across all categories quickly instead of exhausting Food first.
+function interleavePool(){
+  const byCat = {}; CATS.forEach(c=> byCat[c] = POOL.filter(p=>p.cat===c));
+  const maxLen = Math.max(...CATS.map(c=>byCat[c].length));
+  const out = [];
+  for(let i=0;i<maxLen;i++){ CATS.forEach(c=>{ if(byCat[c][i]) out.push(byCat[c][i]); }); }
+  return out;
+}
+const INTERLEAVED_POOL = interleavePool();
+
+/* ---------------- Statistics engine ----------------
+   Beta-Binomial Bayesian analysis (uniform Beta(1,1) prior) with episode
+   collapsing: consecutive headache days are treated as ONE occasion, so a
+   3-day headache streak where you happened to eat the same thing each day
+   only counts as one confirming data point, not three. */
+
+// Lanczos approximation to log-gamma, needed for the incomplete beta function.
+function logGamma(x){
+  const g = 7;
+  const c = [0.99999999999980993,676.5203681218851,-1259.1392167224028,771.32342877765313,
+    -176.61502916214059,12.507343278686905,-0.13857109526572012,9.9843695780195716e-6,1.5056327351493116e-7];
+  if(x<0.5) return Math.log(Math.PI/Math.sin(Math.PI*x)) - logGamma(1-x);
+  x-=1;
+  let a=c[0];
+  const t=x+g+0.5;
+  for(let i=1;i<g+2;i++) a+=c[i]/(x+i);
+  return 0.5*Math.log(2*Math.PI)+(x+0.5)*Math.log(t)-t+Math.log(a);
+}
+function betacf(x,a,b){
+  const MAXIT=200, EPS=3e-7, FPMIN=1e-30;
+  const qab=a+b, qap=a+1, qam=a-1;
+  let c=1, d=1-qab*x/qap;
+  if(Math.abs(d)<FPMIN) d=FPMIN;
+  d=1/d; let h=d;
+  for(let m=1;m<=MAXIT;m++){
+    const m2=2*m;
+    let aa=m*(b-m)*x/((qam+m2)*(a+m2));
+    d=1+aa*d; if(Math.abs(d)<FPMIN) d=FPMIN;
+    c=1+aa/c; if(Math.abs(c)<FPMIN) c=FPMIN;
+    d=1/d; h*=d*c;
+    aa=-(a+m)*(qab+m)*x/((a+m2)*(qap+m2));
+    d=1+aa*d; if(Math.abs(d)<FPMIN) d=FPMIN;
+    c=1+aa/c; if(Math.abs(c)<FPMIN) c=FPMIN;
+    d=1/d;
+    const del=d*c; h*=del;
+    if(Math.abs(del-1)<EPS) break;
+  }
+  return h;
+}
+function betai(x,a,b){ // regularized incomplete beta I_x(a,b)
+  if(x<=0) return 0; if(x>=1) return 1;
+  const bt=Math.exp(logGamma(a+b)-logGamma(a)-logGamma(b)+a*Math.log(x)+b*Math.log(1-x));
+  return x < (a+1)/(a+b+2) ? bt*betacf(x,a,b)/a : 1-bt*betacf(1-x,b,a)/b;
+}
+function betaQuantile(p,a,b){ // inverse CDF via bisection
+  let lo=0, hi=1;
+  for(let i=0;i<50;i++){ const mid=(lo+hi)/2; if(betai(mid,a,b)<p) lo=mid; else hi=mid; }
+  return (lo+hi)/2;
+}
+function betaPosterior(k,n){ // Beta(1,1) prior -> posterior Beta(1+k, 1+n-k)
+  const a=1+k, b=1+(n-k);
+  return { k, n, mean: a/(a+b), low: n>0?betaQuantile(0.05,a,b):0, high: n>0?betaQuantile(0.95,a,b):1 };
+}
+
+function daysBetweenDates(d1,d2){ return Math.round((new Date(d2+'T00:00:00')-new Date(d1+'T00:00:00'))/86400000); }
+
+// Collapse consecutive headache days into single "occasions" so a multi-day
+// streak isn't triple-counted as evidence for whatever you ate that week.
+function buildOccasions(logs){
+  const dates = Object.keys(logs).sort();
+  const occasions = [];
+  let i=0;
+  while(i<dates.length){
+    const d = dates[i];
+    const had = logs[d].headache && logs[d].headache.had;
+    if(had){
+      const episodeDates=[d]; let j=i+1;
+      while(j<dates.length){
+        const prev = episodeDates[episodeDates.length-1], nd = dates[j];
+        const stillHeadache = logs[nd].headache && logs[nd].headache.had;
+        const adjacent = daysBetweenDates(prev,nd)===1;
+        const cont = logs[nd].headache && logs[nd].headache.continuation;
+        // Explicit "New / different" answer breaks the cluster even if the dates are adjacent.
+        // No answer given (older entries, or no headache yesterday to compare) falls back to date-adjacency.
+        const merges = stillHeadache && adjacent && cont!==false;
+        if(merges){ episodeDates.push(nd); j++; } else break;
+      }
+      occasions.push({headache:true, dates:episodeDates});
+      i=j;
+    } else { occasions.push({headache:false, dates:[d]}); i++; }
+  }
+  return occasions;
+}
+function episodeExposureValue(dates, logs, id){
+  let sawFalse=false;
+  for(const d of dates){
+    const v = logs[d].exposures && logs[d].exposures[id];
+    if(v===true) return true;
+    if(v===false) sawFalse=true;
+  }
+  return sawFalse ? false : undefined;
+}
+
+// Compares P(headache | exposed) vs P(headache | not exposed) for one trigger,
+// using Bayesian credible intervals rather than raw counts.
+function triggerStats(logs, id){
+  const occasions = buildOccasions(logs);
+  let k1=0,n1=0,k0=0,n0=0;
+  occasions.forEach(o=>{
+    const val = episodeExposureValue(o.dates, logs, id);
+    if(val===undefined) return;
+    if(val){ n1++; if(o.headache) k1++; } else { n0++; if(o.headache) k0++; }
+  });
+  return { exposed: betaPosterior(k1,n1), unexposed: betaPosterior(k0,n0) };
+}
+function classifyTrigger(stats){
+  const {exposed:e, unexposed:u} = stats;
+  if(e.n<3 || u.n<2) return 'watching';
+  if(e.low > u.high) return 'confirmed'; // credible intervals don't overlap, exposed side higher
+  if(e.n>=4 && e.mean <= u.mean+0.15) return 'ruled_out';
+  return 'watching';
+}
 
 /* ---------------- Data layer ----------------
    Runs as a normal webpage (GitHub Pages), so real localStorage is reliable —
@@ -199,6 +323,13 @@ function todayStr(d=new Date()){
 function daysAgo(dateStr){
   const d1 = new Date(dateStr+'T00:00:00'), d2 = new Date(todayStr()+'T00:00:00');
   return Math.round((d2-d1)/86400000);
+}
+function yesterdayStr(){
+  const d = new Date(); d.setDate(d.getDate()-1); return todayStr(d);
+}
+function hadHeadacheYesterday(){
+  const y = STORE.logs[yesterdayStr()];
+  return !!(y && y.headache && y.headache.had);
 }
 
 /* ---------------- Backup export / import (optional — for switching devices or extra safety) ---------------- */
@@ -243,15 +374,19 @@ function setTab(t){ TAB = t; render(); }
 /* ---------------- Wizard construction ---------------- */
 async function buildWizard(){
   const w = await getWatchlist();
-  const watching = Object.entries(w).filter(([id,v])=>v.status==='watching'||v.status==='confirmed')
-    .sort((a,b)=> (a[1].lastAsked||'').localeCompare(b[1].lastAsked||''))
-    .slice(0,6).map(([id])=>id);
+  const logs = await getAllLogs();
+  const classified = Object.keys(w).map(id => ({id, status: classifyTrigger(triggerStats(logs, id))}));
 
-  const ruledOut = Object.entries(w).filter(([id,v])=>v.status==='ruled_out' && daysAgo(v.lastAsked||'2000-01-01')>=14)
-    .slice(0,1).map(([id])=>id);
+  const watching = classified.filter(c=>c.status==='watching'||c.status==='confirmed')
+    .map(c=>c.id)
+    .sort((a,b)=> (w[a].lastAsked||'').localeCompare(w[b].lastAsked||''))
+    .slice(0,6);
+
+  const ruledOut = classified.filter(c=>c.status==='ruled_out' && daysAgo(w[c.id].lastAsked||'2000-01-01')>=14)
+    .slice(0,1).map(c=>c.id);
 
   const rot = await getRotationState();
-  const unlisted = POOL.filter(p=>!w[p.id]);
+  const unlisted = INTERLEAVED_POOL.filter(p=>!w[p.id]);
   let baseline = [];
   if(unlisted.length){
     for(let i=0;i<Math.min(2,unlisted.length);i++){
@@ -294,46 +429,46 @@ async function finishCheckin(){
   const a = WIZ.answers;
   const log = {
     date,
-    headache: a.headache ? {had:true, severity:a.severity||5, duration:a.duration||'unknown'} : {had:false},
+    headache: a.headache ? {had:true, severity:a.severity||5, onsetTime:a.onsetTime||'', continuation: a.continuation===undefined? null : a.continuation} : {had:false},
     sleepScore: a.sleepScore,
     stress: a.stress, water: a.water, caffeine: a.caffeine, caffeineChange: a.caffeineChange,
     exposures: a.exposures,
     notes: a.notes || ''
   };
 
-  // Update watchlist based on exposures asked this session
   const w = await getWatchlist();
-  const changes = [];
-  for(const [id, exposed] of Object.entries(a.exposures)){
-    if(exposed === null || exposed === undefined) continue;
-    if(!w[id]) w[id] = {id, name:POOL_MAP[id]?.name||id, status:'watching', withHeadache:0, withoutHeadache:0, totalAsked:0, lastAsked:date, added:date};
-    w[id].lastAsked = date;
-    w[id].totalAsked++;
-    if(exposed){
-      if(log.headache.had) w[id].withHeadache++; else w[id].withoutHeadache++;
-    }
+  const logsBefore = await getAllLogs();
+
+  // Track lastAsked + register any new items (existing watchlist items keep no counters — stats are always derived fresh)
+  for(const id of Object.keys(a.exposures)){
+    if(a.exposures[id]===null || a.exposures[id]===undefined) continue;
+    if(!w[id]) w[id] = {id, name:POOL_MAP[id]?.name||id, added:date, lastAsked:date};
+    else w[id].lastAsked = date;
   }
-  // Add any new items from expanded recall not yet on watchlist
   (a.recallItems||[]).forEach(id=>{
-    if(!w[id]) w[id] = {id, name:POOL_MAP[id]?.name||id, status:'watching', withHeadache:1, withoutHeadache:0, totalAsked:1, lastAsked:date, added:date};
+    if(!w[id]) w[id] = {id, name:POOL_MAP[id]?.name||id, added:date, lastAsked:date};
     a.exposures[id] = true;
   });
 
-  // Re-run status logic
-  for(const id of Object.keys(w)){
-    const item = w[id];
-    const exposedTotal = item.withHeadache + item.withoutHeadache;
-    if(exposedTotal >= 4 && item.withHeadache <= 1){
-      if(item.status !== 'ruled_out'){ item.status = 'ruled_out'; changes.push(item.name+' looks unlikely as a trigger — moved off daily tracking.'); }
-    } else if(exposedTotal >= 3 && (item.withHeadache/exposedTotal) >= 0.6){
-      if(item.status !== 'confirmed'){ item.status = 'confirmed'; changes.push(item.name+' is showing a real pattern with your headaches.'); }
-    } else if(item.status === 'ruled_out' && exposedTotal < 4){
-      item.status = 'watching';
-    }
-  }
+  // Compute status before vs. after today's entry to report meaningful transitions
+  const beforeStatus = {};
+  Object.keys(w).forEach(id=> beforeStatus[id] = classifyTrigger(triggerStats(logsBefore, id)));
+
   const watchlistOk = await saveWatchlist(w);
   STORE.logs[date] = {...log, exposures:a.exposures};
   const logOk = persist();
+
+  const logsAfter = await getAllLogs();
+  const changes = [];
+  Object.keys(w).forEach(id=>{
+    const after = classifyTrigger(triggerStats(logsAfter, id));
+    if(after !== beforeStatus[id]){
+      const name = w[id].name;
+      if(after==='confirmed') changes.push(name+' is now showing a real pattern with your headaches.');
+      else if(after==='ruled_out') changes.push(name+' looks unlikely as a trigger — moved off daily tracking.');
+      else if(beforeStatus[id]==='ruled_out') changes.push(name+' is back under watch — new data shifted the picture.');
+    }
+  });
 
   WIZ.savedChanges = changes;
   WIZ.saveFailed = !(watchlistOk && logOk);
@@ -386,10 +521,18 @@ async function renderCheckin(){
     if(WIZ.answers.headache===true){
       body += `<p class="qtitle" style="margin-top:22px;font-size:1.05rem;">How severe, 1–10?</p>
         <div class="pillrow">${[1,2,3,4,5,6,7,8,9,10].map(n=>pill(n, WIZ.answers.severity===n, `setSeverity(${n})`)).join('')}</div>
-        <p class="qtitle" style="margin-top:18px;font-size:1.05rem;">About how long did it last?</p>
-        <div class="pillrow">
-          ${['Under 1h','1–4h','4–12h','All day'].map(d=>pill(d, WIZ.answers.duration===d, `setDuration('${d}')`)).join('')}
-        </div>`;
+        <p class="qtitle" style="margin-top:18px;font-size:1.05rem;">Roughly when did it start?</p>
+        <input type="time" id="onsetInput" value="${WIZ.answers.onsetTime||''}"
+          oninput="WIZ.answers.onsetTime=this.value; enableNextIfReady();"
+          style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:12px;font-family:'Inter',sans-serif;font-size:1.3rem;text-align:center;">`;
+      if(hadHeadacheYesterday()){
+        body += `<p class="qtitle" style="margin-top:18px;font-size:1.05rem;">Same as yesterday's, or a new one?</p>
+          <p class="qhint">You had a headache yesterday too — this helps tell one multi-day cluster from two separate events.</p>
+          <div class="pillrow">
+            ${pill('Continuing', WIZ.answers.continuation===true, `setAns('continuation',true)`)}
+            ${pill('New / different', WIZ.answers.continuation===false, `setAns('continuation',false)`)}
+          </div>`;
+      }
     }
   } else if(step.type==='sleep'){
     body = `<p class="qtitle">Sleep score last night?</p>
@@ -462,7 +605,7 @@ async function renderCheckin(){
 
 function stepIsAnswered(step){
   const a = WIZ.answers;
-  if(step.type==='headache') return a.headache===false || (a.headache===true && a.severity && a.duration);
+  if(step.type==='headache') return a.headache===false || (a.headache===true && a.severity && a.onsetTime && (!hadHeadacheYesterday() || a.continuation!==undefined));
   if(step.type==='sleep') return a.sleepScore!==undefined && a.sleepScore!==null;
   if(step.type==='stress') return !!a.stress;
   if(step.type==='water') return !!a.water;
@@ -475,7 +618,6 @@ function stepIsAnswered(step){
 
 function setHeadache(v){ WIZ.answers.headache=v; render(); }
 function setSeverity(n){ WIZ.answers.severity=n; render(); }
-function setDuration(d){ WIZ.answers.duration=d; render(); }
 function setAns(k,v){ WIZ.answers[k]=v; render(); }
 function enableNextIfReady(){
   const btns = document.querySelectorAll('.navrow .primary');
@@ -503,6 +645,31 @@ async function quickStats(){
   </div>`;
 }
 
+function onsetTimeSummary(entries){
+  const times = entries
+    .filter(l=>l.headache && l.headache.had && l.headache.onsetTime)
+    .map(l=>{
+      const [h,m] = l.headache.onsetTime.split(':').map(Number);
+      return h*60+m; // minutes since midnight
+    })
+    .sort((a,b)=>a-b);
+  if(times.length<3) return '';
+  const fmt = mins=>{
+    const h=Math.floor(mins/60), m=Math.round(mins%60);
+    const ampm = h<12?'AM':'PM'; const h12 = h%12===0?12:h%12;
+    return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+  };
+  const median = times[Math.floor(times.length/2)];
+  const p25 = times[Math.floor(times.length*0.25)];
+  const p75 = times[Math.min(times.length-1,Math.floor(times.length*0.75))];
+  return `<div class="card">
+    <div class="sectionlabel" style="margin-top:0;">Typical onset</div>
+    <div class="trigrow"><div class="name">Most headaches start around</div><div class="rate">${fmt(median)}</div></div>
+    <div class="trigrow"><div class="name">Usual window</div><div class="rate">${fmt(p25)} – ${fmt(p75)}</div></div>
+    <p class="qhint" style="margin-top:8px;">Based on ${times.length} logged onset times. Worth checking against your usual lunch, caffeine, and screen-time patterns for that window.</p>
+  </div>`;
+}
+
 /* ---------------- Insights ---------------- */
 async function renderInsights(){
   const logs = await getAllLogs();
@@ -512,14 +679,18 @@ async function renderInsights(){
   const withH = entries.filter(l=>l.headache && l.headache.had).length;
   const baseRate = total? withH/total : 0;
 
-  const confirmed = Object.values(w).filter(i=>i.status==='confirmed');
-  const watching = Object.values(w).filter(i=>i.status==='watching');
-  const ruledOut = Object.values(w).filter(i=>i.status==='ruled_out');
+  const rows = Object.keys(w).map(id=>{
+    const stats = triggerStats(logs, id);
+    return { id, name: w[id].name, status: classifyTrigger(stats), stats };
+  });
+  const confirmed = rows.filter(r=>r.status==='confirmed');
+  const watching = rows.filter(r=>r.status==='watching');
+  const ruledOut = rows.filter(r=>r.status==='ruled_out');
 
-  function rateLine(item){
-    const exposedTotal = item.withHeadache+item.withoutHeadache;
-    const rate = exposedTotal? Math.round(item.withHeadache/exposedTotal*100) : 0;
-    return `<div class="trigrow"><div class="name">${item.name}</div><div class="rate">${rate}% of ${exposedTotal}× <span class="flag ${item.status}">${item.status.replace('_',' ')}</span></div></div>`;
+  function rateLine(r){
+    const e = r.stats.exposed;
+    const pct = Math.round(e.mean*100), lo = Math.round(e.low*100), hi = Math.round(e.high*100);
+    return `<div class="trigrow"><div class="name">${r.name}</div><div class="rate">~${pct}% (${lo}–${hi}%) over ${e.n}× <span class="flag ${r.status}">${r.status.replace('_',' ')}</span></div></div>`;
   }
 
   const WATER_MAP = {'0–1':0.5,'2–3':2.5,'4–5':4.5,'6+':6};
@@ -540,6 +711,8 @@ async function renderInsights(){
     <div class="stat"><div class="n">${Math.round(baseRate*100)}%</div><div class="l">baseline headache rate</div></div>
   </div>
 
+  ${onsetTimeSummary(entries)}
+
   <div class="card">
     <div class="sectionlabel">Daily factors</div>
     ${coreFactorLine('Sleep score','', l=>l.sleepScore)}
@@ -550,7 +723,7 @@ async function renderInsights(){
 
   <div class="card">
     <div class="sectionlabel">Likely triggers</div>
-    ${confirmed.length? confirmed.map(rateLine).join('') : `<div class="empty">None flagged yet — keep logging. Usually needs a handful of data points.</div>`}
+    ${confirmed.length? confirmed.map(rateLine).join('') : `<div class="empty">None flagged yet — keep logging. Usually needs several data points before the range narrows enough to say.</div>`}
 
     <div class="sectionlabel">Still watching</div>
     ${watching.length? watching.map(rateLine).join('') : `<div class="empty">Nothing actively being watched right now.</div>`}
@@ -560,7 +733,7 @@ async function renderInsights(){
 
     <button class="addbtn" onclick="promptAddTrigger()">+ Add something to watch manually</button>
   </div>
-  <p class="qhint" style="padding:0 4px;">These are correlations from your own data, not proof of cause — but a repeated pattern across many entries is worth paying attention to and raising with whoever manages your headache care.</p>
+  <p class="qhint" style="padding:0 4px;">Percentages are headache rate when exposed, with a range showing how confident that estimate is (narrows as more data comes in — a wide range just means "too early to tell"). A multi-day headache streak only counts once toward a trigger, not once per day, so one bad week can't fake a pattern on its own. Still correlation, not proof — worth raising with whoever manages your headache care if a pattern holds up.</p>
   `;
 }
 
@@ -570,7 +743,7 @@ async function promptAddTrigger(){
   const id = 'custom_'+name.toLowerCase().replace(/[^a-z0-9]+/g,'_').slice(0,30)+'_'+Date.now();
   POOL_MAP[id] = {id, name, cat:'Food'};
   const w = await getWatchlist();
-  w[id] = {id, name, status:'watching', withHeadache:0, withoutHeadache:0, totalAsked:0, lastAsked:'2000-01-01', added:todayStr(), custom:true};
+  w[id] = {id, name, added:todayStr(), lastAsked:'2000-01-01', custom:true};
   await saveWatchlist(w);
   render();
 }
@@ -605,12 +778,13 @@ async function exportCSV(){
   const logs = await getAllLogs();
   const w = await getWatchlist();
   const trigIds = Object.keys(w);
-  const headers = ['date','headache','severity','duration','sleepScore','stress','water','caffeine','caffeineChange',...trigIds,'notes'];
+  const headers = ['date','headache','severity','onsetTime','continuation','sleepScore','stress','water','caffeine','caffeineChange',...trigIds,'notes'];
   const rows = [headers.join(',')];
   Object.keys(logs).sort().forEach(d=>{
     const l = logs[d];
     const row = [
-      d, l.headache&&l.headache.had?'yes':'no', l.headache&&l.headache.severity||'', l.headache&&l.headache.duration||'',
+      d, l.headache&&l.headache.had?'yes':'no', l.headache&&l.headache.severity||'', l.headache&&l.headache.onsetTime||'',
+      l.headache&&l.headache.continuation===true?'continuing': l.headache&&l.headache.continuation===false?'new':'',
       l.sleepScore??'', l.stress||'', l.water||'', l.caffeine||'', l.caffeineChange||'',
       ...trigIds.map(id=> l.exposures && l.exposures[id]===true?'yes': l.exposures && l.exposures[id]===false?'no':''),
       `"${(l.notes||'').replace(/"/g,'""')}"`
