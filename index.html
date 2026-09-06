@@ -322,6 +322,13 @@ STORE.trials = STORE.trials || [];
 STORE.watchlist = STORE.watchlist || {};
 STORE.logs = STORE.logs || {};
 STORE.rotation = STORE.rotation || {index:0};
+STORE.appliedDefaults = STORE.appliedDefaults || {};
+if(!STORE.appliedDefaults.pinNuts){
+  if(!STORE.watchlist['nuts']) STORE.watchlist['nuts'] = {id:'nuts', name:POOL_MAP['nuts'].name, added:todayStr(), lastAsked:'2000-01-01'};
+  STORE.watchlist['nuts'].pinned = true;
+  STORE.appliedDefaults.pinNuts = true;
+  persist();
+}
 function persist(){
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(STORE)); return true; }
   catch(e){ console.error('localStorage save failed', e); return false; }
@@ -393,18 +400,20 @@ async function buildWizard(){
   const classified = Object.keys(w).map(id => ({id, status: classifyTrigger(triggerStats(logs, id))}));
 
   const pinned = Object.keys(w).filter(id=>w[id].pinned);
+  const activeTrialIds = STORE.trials.filter(t=>!t.endDate).flatMap(t=>t.itemIds);
+  const alwaysAsk = [...new Set([...pinned, ...activeTrialIds])];
 
   const watching = classified.filter(c=>c.status==='watching'||c.status==='confirmed')
     .map(c=>c.id)
-    .filter(id=>!pinned.includes(id))
+    .filter(id=>!alwaysAsk.includes(id))
     .sort((a,b)=> (w[a].lastAsked||'').localeCompare(w[b].lastAsked||''))
     .slice(0,6);
 
-  const ruledOut = classified.filter(c=>c.status==='ruled_out' && daysAgo(w[c.id].lastAsked||'2000-01-01')>=14 && !pinned.includes(c.id))
+  const ruledOut = classified.filter(c=>c.status==='ruled_out' && daysAgo(w[c.id].lastAsked||'2000-01-01')>=14 && !alwaysAsk.includes(c.id))
     .slice(0,1).map(c=>c.id);
 
   const rot = await getRotationState();
-  const unlisted = INTERLEAVED_POOL.filter(p=>!w[p.id]);
+  const unlisted = INTERLEAVED_POOL.filter(p=>!w[p.id] && !alwaysAsk.includes(p.id));
   let baseline = [];
   if(unlisted.length){
     for(let i=0;i<Math.min(2,unlisted.length);i++){
@@ -413,11 +422,12 @@ async function buildWizard(){
     await saveRotationState({index:(rot.index+2)%unlisted.length});
   }
 
-  const watchIds = [...new Set([...pinned, ...watching, ...ruledOut, ...baseline])];
+  const watchIds = [...new Set([...alwaysAsk, ...watching, ...ruledOut, ...baseline])];
 
   const steps = [];
   steps.push({type:'headache'});
   steps.push({type:'sleep'});
+  steps.push({type:'pillow'});
   steps.push({type:'stress'});
   steps.push({type:'water'});
   steps.push({type:'caffeine'});
@@ -448,7 +458,7 @@ async function finishCheckin(){
   const log = {
     date,
     headache: a.headache ? {had:true, severity:a.severity||5, onsetTime:a.onsetTime||'', continuation: a.continuation===undefined? null : a.continuation} : {had:false},
-    sleepScore: a.sleepScore,
+    sleepScore: a.sleepScore, pillow: a.pillow,
     stress: a.stress, water: a.water, caffeine: a.caffeine, caffeineChange: a.caffeineChange,
     exposures: a.exposures,
     notes: a.notes || ''
@@ -559,6 +569,10 @@ async function renderCheckin(){
         value="${WIZ.answers.sleepScore??''}"
         oninput="WIZ.answers.sleepScore = this.value===''?undefined:Math.max(0,Math.min(100,parseInt(this.value)||0)); enableNextIfReady();"
         style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:12px;font-family:'Inter',sans-serif;font-size:1.4rem;text-align:center;">`;
+  } else if(step.type==='pillow'){
+    body = `<p class="qtitle">Cervical pillow last night?</p>
+      <p class="qhint">The night that just ended, not tonight</p>
+      <div class="pillrow">${['Not at all','Part of the night','All night'].map(v=>pill(v, WIZ.answers.pillow===v, `setAns('pillow','${v}')`)).join('')}</div>`;
   } else if(step.type==='stress'){
     body = `<p class="qtitle">Stress level today?</p><p class="qhint">1 = calm, 5 = very stressed</p>
       <div class="scale">${[1,2,3,4,5].map(n=>pill(n, WIZ.answers.stress===n, `setAns('stress',${n})`)).join('')}</div>`;
@@ -627,6 +641,7 @@ function stepIsAnswered(step){
   const a = WIZ.answers;
   if(step.type==='headache') return a.headache===false || (a.headache===true && a.severity && a.onsetTime && (!hadHeadacheYesterday() || a.continuation!==undefined));
   if(step.type==='sleep') return a.sleepScore!==undefined && a.sleepScore!==null;
+  if(step.type==='pillow') return !!a.pillow;
   if(step.type==='stress') return !!a.stress;
   if(step.type==='water') return !!a.water;
   if(step.type==='caffeine') return a.caffeine && a.caffeineChange;
@@ -792,6 +807,7 @@ async function renderInsights(){
 
   const WATER_MAP = {'0–1':0.5,'2–3':2.5,'4–5':4.5,'6+':6};
   const CAF_MAP = {'0 cups':0,'1 cup':1,'2 cups':2,'3 cups':3,'4+ cups':4};
+  const PILLOW_MAP = {'Not at all':0,'Part of the night':1,'All night':2};
 
   function coreFactorLine(label, unit, extractNum){
     const hVals = entries.filter(l=>l.headache&&l.headache.had).map(extractNum).filter(v=>v!==undefined&&v!==null);
@@ -813,6 +829,7 @@ async function renderInsights(){
   <div class="card">
     <div class="sectionlabel">Daily factors</div>
     ${coreFactorLine('Sleep score','', l=>l.sleepScore)}
+    ${coreFactorLine('Cervical pillow use (0=none,2=all night)','', l=>PILLOW_MAP[l.pillow])}
     ${coreFactorLine('Stress (1–5)','', l=>l.stress)}
     ${coreFactorLine('Water','glasses', l=>WATER_MAP[l.water])}
     ${coreFactorLine('Caffeine','cups', l=>CAF_MAP[l.caffeine])}
@@ -879,14 +896,14 @@ async function exportCSV(){
   const logs = await getAllLogs();
   const w = await getWatchlist();
   const trigIds = Object.keys(w);
-  const headers = ['date','headache','severity','onsetTime','continuation','sleepScore','stress','water','caffeine','caffeineChange',...trigIds,'notes'];
+  const headers = ['date','headache','severity','onsetTime','continuation','sleepScore','pillow','stress','water','caffeine','caffeineChange',...trigIds,'notes'];
   const rows = [headers.join(',')];
   Object.keys(logs).sort().forEach(d=>{
     const l = logs[d];
     const row = [
       d, l.headache&&l.headache.had?'yes':'no', l.headache&&l.headache.severity||'', l.headache&&l.headache.onsetTime||'',
       l.headache&&l.headache.continuation===true?'continuing': l.headache&&l.headache.continuation===false?'new':'',
-      l.sleepScore??'', l.stress||'', l.water||'', l.caffeine||'', l.caffeineChange||'',
+      l.sleepScore??'', l.pillow||'', l.stress||'', l.water||'', l.caffeine||'', l.caffeineChange||'',
       ...trigIds.map(id=> l.exposures && l.exposures[id]===true?'yes': l.exposures && l.exposures[id]===false?'no':''),
       `"${(l.notes||'').replace(/"/g,'""')}"`
     ];
