@@ -925,6 +925,42 @@ function exerciseRow(name, logs){
   return `<div class="trigrow"><div class="name">${name} days</div><div class="rate">~${pct}% (${lo}–${hi}%) over ${e.n}× vs ${bpct} other days</div></div>`;
 }
 
+function buildRankedCandidates(logs, w){
+  const candidates = [];
+  Object.keys(w).forEach(id=>{
+    const stats = triggerStats(logs, id);
+    if(stats.exposed.n>=2) candidates.push({ name: w[id].name, category:'Trigger', stats });
+  });
+  const wstats = workoutStats(logs);
+  [['Any workout day', wstats.any],['Home gym days', wstats.home],['Away gym days', wstats.away],['Jubail gym days', wstats.jubail]].forEach(([label, s])=>{
+    if(s.exposed.n>=2) candidates.push({ name: label, category:'Workout', stats:s });
+  });
+  getAllExerciseNames().forEach(name=>{
+    const stats = exerciseStats(logs, name);
+    if(stats.exposed.n>=2) candidates.push({ name, category:'Exercise', stats });
+  });
+  candidates.forEach(c=> c.diff = c.stats.exposed.mean - c.stats.unexposed.mean);
+  candidates.sort((a,b)=> Math.abs(b.diff)-Math.abs(a.diff));
+  return candidates.slice(0,8);
+}
+function renderRankedCard(logs, w){
+  const candidates = buildRankedCandidates(logs, w);
+  if(candidates.length===0){
+    return `<div class="card"><div class="sectionlabel" style="margin-top:0;">Worth a closer look</div><div class="empty">Not enough data yet across foods, workouts, or exercises — check back after a few more weeks of logging both apps.</div></div>`;
+  }
+  function line(c){
+    const e=c.stats.exposed, b=c.stats.unexposed;
+    const pct=Math.round(e.mean*100), bpct = b.n? Math.round(b.mean*100)+'%':'—';
+    const dirWord = c.diff>0 ? 'higher' : 'lower';
+    return `<div class="trigrow"><div class="name">${c.name}<div class="qhint" style="margin:0;">${c.category}</div></div><div class="rate">${pct}% vs ${bpct}<br>${Math.abs(Math.round(c.diff*100))}pt ${dirWord}, ${e.n}×</div></div>`;
+  }
+  return `<div class="card">
+    <div class="sectionlabel" style="margin-top:0;">Worth a closer look</div>
+    <p class="qhint">Every trigger, gym mode, and specific exercise with at least 2 data points, ranked by the size of the gap so far — this is exploratory, not the same as the confirmed bar elsewhere on this page, but it's where I'd look next.</p>
+    ${candidates.map(line).join('')}
+  </div>`;
+}
+
 /* ---------------- Insights ---------------- */
 async function renderInsights(){
   const logs = await getAllLogs();
@@ -966,6 +1002,8 @@ async function renderInsights(){
     <div class="stat"><div class="n">${total}</div><div class="l">days logged</div></div>
     <div class="stat"><div class="n">${Math.round(baseRate*100)}%</div><div class="l">baseline headache rate</div></div>
   </div>
+
+  ${renderRankedCard(logs, w)}
 
   ${onsetTimeSummary(entries)}
 
