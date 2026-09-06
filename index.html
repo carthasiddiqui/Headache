@@ -297,6 +297,57 @@ function classifyTrigger(stats){
 }
 
 // Compares headache rate during an elimination window against all other logged days.
+/* ---------------- Workout app integration ----------------
+   The workout tracker (carthasiddiqui.github.io/Workout) stores its data
+   under localStorage key 'workout_tracker_v3'. localStorage is scoped by
+   ORIGIN (domain), not by folder/repo — so as long as this app is also
+   hosted somewhere under carthasiddiqui.github.io, it shares the same
+   storage and can read that data directly. No export/import needed. */
+const WORKOUT_STORAGE_KEY = 'workout_tracker_v3';
+function getWorkoutSessions(){
+  try{
+    const raw = localStorage.getItem(WORKOUT_STORAGE_KEY);
+    if(!raw) return null; // null = not found (different origin, or workout app never opened here)
+    const data = JSON.parse(raw);
+    return data.sessions || [];
+  }catch(e){ return null; }
+}
+function workoutSessionsByDate(){
+  const sessions = getWorkoutSessions();
+  const map = {};
+  if(!sessions) return map;
+  sessions.forEach(s=>{
+    if(!s.date) return;
+    const d = todayStr(new Date(s.date));
+    map[d] = s; // last session wins if somehow two on one date
+  });
+  return map;
+}
+function getSessionVolume(session){
+  return (session.supersets||[]).flatMap(ss=>ss.exercises||[]).reduce((total,ex)=>
+    total + (ex.sets||[]).reduce((a,set)=>a+((set.weight||0)*(set.reps||0)),0), 0);
+}
+// Headache rate on workout days vs rest days, overall and by gym mode — same
+// episode-collapsing logic as food/environment triggers, for consistency.
+function workoutStats(logs){
+  const byDate = workoutSessionsByDate();
+  const occasions = buildOccasions(logs);
+  function statsFor(matchFn){
+    let k1=0,n1=0,k0=0,n0=0;
+    occasions.forEach(o=>{
+      const matched = o.dates.some(d=>byDate[d] && matchFn(byDate[d]));
+      if(matched){ n1++; if(o.headache) k1++; } else { n0++; if(o.headache) k0++; }
+    });
+    return { exposed: betaPosterior(k1,n1), unexposed: betaPosterior(k0,n0) };
+  }
+  return {
+    any: statsFor(()=>true),
+    home: statsFor(s=>s.gymMode==='home'),
+    away: statsFor(s=>s.gymMode==='away'),
+    jubail: statsFor(s=>s.gymMode==='jubail'),
+  };
+}
+
 function trialStats(logs, trial){
   const inTrial = d => d>=trial.startDate && (!trial.endDate || d<=trial.endDate);
   const dates = Object.keys(logs);
@@ -678,6 +729,9 @@ function togglePin(id){
 let PIN_PICKER_OPEN = false;
 function togglePinPicker(){ PIN_PICKER_OPEN = !PIN_PICKER_OPEN; render(); }
 
+let SELECTED_EXERCISE = null;
+function setSelectedExercise(name){ SELECTED_EXERCISE = name; render(); }
+
 let TRIAL_PICKER_OPEN = false;
 let TRIAL_SELECTION = [];
 function toggleTrialPicker(){ TRIAL_PICKER_OPEN = !TRIAL_PICKER_OPEN; TRIAL_SELECTION = []; render(); }
@@ -782,6 +836,95 @@ function renderTrialsCard(logs){
   </div>`;
 }
 
+function getAllExerciseNames(){
+  const sessions = getWorkoutSessions();
+  if(!sessions) return [];
+  const names = new Set();
+  sessions.forEach(s=>{
+    (s.supersets||[]).forEach(ss=>(ss.exercises||[]).forEach(ex=>{ if(ex.name) names.add(ex.name); }));
+    (s.core||[]).forEach(c=>{ if(c.name) names.add(c.name); });
+  });
+  return [...names].sort();
+}
+function exerciseNamesByDate(){
+  const sessions = getWorkoutSessions();
+  const map = {};
+  if(!sessions) return map;
+  sessions.forEach(s=>{
+    if(!s.date) return;
+    const d = todayStr(new Date(s.date));
+    if(!map[d]) map[d] = new Set();
+    (s.supersets||[]).forEach(ss=>(ss.exercises||[]).forEach(ex=>{
+      const performed = (ex.sets||[]).some(set=>set.done!==false);
+      if(ex.name && performed) map[d].add(ex.name);
+    }));
+    (s.core||[]).forEach(c=>{
+      const performed = (c.rounds||[]).some(r=>r.done!==false);
+      if(c.name && performed) map[d].add(c.name);
+    });
+  });
+  return map;
+}
+// Headache rate on days a specific exercise was performed vs. all other logged days
+// (rest days AND workout days that didn't include it).
+function exerciseStats(logs, name){
+  const byDate = exerciseNamesByDate();
+  const occasions = buildOccasions(logs);
+  let k1=0,n1=0,k0=0,n0=0;
+  occasions.forEach(o=>{
+    const matched = o.dates.some(d=> byDate[d] && byDate[d].has(name));
+    if(matched){ n1++; if(o.headache) k1++; } else { n0++; if(o.headache) k0++; }
+  });
+  return { exposed: betaPosterior(k1,n1), unexposed: betaPosterior(k0,n0) };
+}
+
+function renderWorkoutCard(logs){
+  const sessions = getWorkoutSessions();
+  if(sessions===null){
+    return `<div class="card">
+      <div class="sectionlabel" style="margin-top:0;">Workouts</div>
+      <div class="empty">No workout data found in this browser. This only works if this app and your workout tracker are hosted under the same domain (carthasiddiqui.github.io) and you've opened the workout app at least once in this browser.</div>
+    </div>`;
+  }
+  if(sessions.length===0){
+    return `<div class="card"><div class="sectionlabel" style="margin-top:0;">Workouts</div><div class="empty">Workout data found, but no sessions logged yet.</div></div>`;
+  }
+  const stats = workoutStats(logs);
+  function row(label, s){
+    if(s.exposed.n===0) return `<div class="trigrow"><div class="name">${label}</div><div class="rate">no sessions yet</div></div>`;
+    const pct=Math.round(s.exposed.mean*100), lo=Math.round(s.exposed.low*100), hi=Math.round(s.exposed.high*100);
+    return `<div class="trigrow"><div class="name">${label}</div><div class="rate">~${pct}% (${lo}–${hi}%) over ${s.exposed.n}×</div></div>`;
+  }
+  const totalVol = sessions.reduce((a,s)=>a+getSessionVolume(s),0);
+  const avgVol = sessions.length? Math.round(totalVol/sessions.length) : 0;
+  const exerciseNames = getAllExerciseNames();
+  const exercisePicker = exerciseNames.length ? `
+    <div class="sectionlabel">By specific exercise</div>
+    <select onchange="setSelectedExercise(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px;font-family:'Inter',sans-serif;font-size:0.9rem;">
+      <option value="">Choose an exercise…</option>
+      ${exerciseNames.map(n=>`<option value="${n.replace(/"/g,'')}" ${SELECTED_EXERCISE===n?'selected':''}>${n}</option>`).join('')}
+    </select>
+    ${SELECTED_EXERCISE ? exerciseRow(SELECTED_EXERCISE, logs) : `<p class="qhint" style="margin-top:6px;">Note: exercises rotate in and out across your 12-week program's phases, so "does X exercise appear" is partly confounded with "how far into the program" — worth keeping in mind if something shows up here.</p>`}
+  ` : '';
+  return `<div class="card">
+    <div class="sectionlabel" style="margin-top:0;">Workouts</div>
+    ${row('Workout days (any gym)', stats.any)}
+    ${row('Home gym days', stats.home)}
+    ${row('Away gym days', stats.away)}
+    ${row('Jubail gym days', stats.jubail)}
+    <p class="qhint" style="margin-top:8px;">${sessions.length} workout sessions found, average volume ~${avgVol} (weight × reps summed). Same episode-collapsing as other triggers — a multi-day headache streak after one workout only counts once.</p>
+    ${exercisePicker}
+  </div>`;
+}
+function exerciseRow(name, logs){
+  const stats = exerciseStats(logs, name);
+  const e = stats.exposed, b = stats.unexposed;
+  if(e.n===0) return `<div class="empty">No sessions with ${name} logged yet.</div>`;
+  const pct=Math.round(e.mean*100), lo=Math.round(e.low*100), hi=Math.round(e.high*100);
+  const bpct = b.n? Math.round(b.mean*100)+'%' : '—';
+  return `<div class="trigrow"><div class="name">${name} days</div><div class="rate">~${pct}% (${lo}–${hi}%) over ${e.n}× vs ${bpct} other days</div></div>`;
+}
+
 /* ---------------- Insights ---------------- */
 async function renderInsights(){
   const logs = await getAllLogs();
@@ -836,6 +979,8 @@ async function renderInsights(){
   </div>
 
   ${renderPinnedCard(w)}
+
+  ${renderWorkoutCard(logs)}
 
   ${renderTrialsCard(logs)}
 
