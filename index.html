@@ -397,11 +397,13 @@ function daysAgo(dateStr){
   const d1 = new Date(dateStr+'T00:00:00'), d2 = new Date(todayStr()+'T00:00:00');
   return Math.round((d2-d1)/86400000);
 }
-function yesterdayStr(){
-  const d = new Date(); d.setDate(d.getDate()-1); return todayStr(d);
+function yesterdayStr(refDate){
+  const d = refDate? new Date(refDate+'T00:00:00') : new Date();
+  d.setDate(d.getDate()-1); return todayStr(d);
 }
 function hadHeadacheYesterday(){
-  const y = STORE.logs[yesterdayStr()];
+  const ref = (WIZ && WIZ.editDate) ? WIZ.editDate : undefined;
+  const y = STORE.logs[yesterdayStr(ref)];
   return !!(y && y.headache && y.headache.had);
 }
 
@@ -504,7 +506,7 @@ function goNext(){
 function goBack(){ if(WIZ.i>0){ WIZ.i--; render(); } }
 
 async function finishCheckin(){
-  const date = todayStr();
+  const date = WIZ.editDate || todayStr();
   const a = WIZ.answers;
   const log = {
     date,
@@ -572,7 +574,7 @@ async function render(){
 }
 
 async function renderCheckin(){
-  const today = todayStr();
+  const today = (WIZ && WIZ.editDate) ? WIZ.editDate : todayStr();
   if(!WIZ){
     const existing = STORE.logs[today] || null;
     let head = `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header>`;
@@ -656,33 +658,43 @@ async function renderCheckin(){
         `<div class="checkrow ${selected.has(p.id)?'checked':''}" onclick="toggleRecall('${p.id}')"><div class="box"></div>${p.name}</div>`
       ).join('')).join('')}
       </div>`;
+  } else if(step.type==='review_triggers'){
+    body = `<p class="qtitle">Review what you logged</p>
+      <p class="qhint">Tap anything to correct it — including things that weren't asked about originally, like a food you forgot to mark.</p>
+      <div class="checklist">
+      ${CATS.map(cat=>`<div class="cat">${cat}</div>` + POOL.filter(p=>p.cat===cat).map(p=>
+        `<div class="checkrow ${WIZ.answers.exposures[p.id]===true?'checked':''}" onclick="toggleEditExposure('${p.id}')"><div class="box"></div>${p.name}</div>`
+      ).join('')).join('')}
+      </div>`;
   } else if(step.type==='notes'){
     body = `<p class="qtitle">Anything else worth noting?</p>
       <p class="qhint">Optional — skip if nothing comes to mind.</p>
       <textarea id="notesInput" oninput="WIZ.answers.notes=this.value">${WIZ.answers.notes||''}</textarea>`;
   } else if(step.type==='done'){
     const changes = WIZ.savedChanges || [];
+    const isEdit = !!WIZ.editDate;
     if(WIZ.saveFailed){
       body = `<p class="qtitle" style="color:var(--alert);">Save didn't go through</p>
         <p class="qhint">Your browser's local storage blocked the save (this can happen in private/incognito mode, or if storage is full). Download a backup so nothing's lost, then check your browser settings.</p>
         <button class="primary" style="margin-top:10px;" onclick="exportBackup()">Download backup</button>`;
-      return `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header><div class="card">${body}</div>`;
+      return `<header class="top"><h1>${isEdit?'Edit entry':'Headache Log'}</h1><span class="date">${today}</span></header><div class="card">${body}</div>`;
     }
-    body = `<p class="qtitle">Logged for ${today} ✓</p>
-      <p class="qhint">${WIZ.answers.headache ? 'Sorry you had a headache today.' : 'No headache — good.'} Thanks for taking three minutes for this. Saved automatically on this device.</p>
+    const doneAction = isEdit ? `WIZ=null;EXPANDED_DATE='${today}';setTab('history')` : `WIZ=null;setTab('checkin')`;
+    body = `<p class="qtitle">${isEdit?'Updated':'Logged'} for ${today} ✓</p>
+      <p class="qhint">${isEdit? 'Your entry has been corrected.' : (WIZ.answers.headache ? 'Sorry you had a headache today.' : 'No headache — good.') + ' Thanks for taking three minutes for this.'} Saved automatically on this device.</p>
       ${changes.length? `<div class="summarybox">${changes.map(c=>`<div>• ${c}</div>`).join('')}</div>` : ''}
-      <button class="primary" style="margin-top:18px;" onclick="WIZ=null;setTab('checkin')">Done</button>`;
-    return `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header>${body}`;
+      <button class="primary" style="margin-top:18px;" onclick="${doneAction}">Done</button>`;
+    return `<header class="top"><h1>${isEdit?'Edit entry':'Headache Log'}</h1><span class="date">${today}</span></header>${body}`;
   }
 
   const canAdvance = stepIsAnswered(step);
   const isLast = step.type==='notes';
-  return `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header>
+  return `<header class="top"><h1>${WIZ.editDate?'Edit entry':'Headache Log'}</h1><span class="date">${today}</span></header>
     <div class="card">
       <div class="progress">${dots}</div>
       ${body}
       <div class="navrow">
-        <button class="ghost" onclick="${WIZ.i===0?'WIZ=null;render()':'goBack()'}">${WIZ.i===0?'Cancel':'Back'}</button>
+        <button class="ghost" onclick="${WIZ.i===0? (WIZ.editDate? `WIZ=null;setTab('history')` : `WIZ=null;render()`) : 'goBack()'}">${WIZ.i===0?'Cancel':'Back'}</button>
         <button class="primary" ${canAdvance?'':'disabled'} onclick="${isLast? 'finishCheckin()' : 'goNext()'}">${isLast?'Save':'Next'}</button>
       </div>
     </div>`;
@@ -698,6 +710,7 @@ function stepIsAnswered(step){
   if(step.type==='caffeine') return a.caffeine && a.caffeineChange;
   if(step.type==='trigger') return a.exposures[step.id]!==undefined;
   if(step.type==='recall_gate') return true;
+  if(step.type==='review_triggers') return true;
   if(step.type==='notes') return true;
   return true;
 }
@@ -716,6 +729,45 @@ function toggleRecall(id){
   const arr = WIZ.answers.recallItems;
   const idx = arr.indexOf(id);
   if(idx>-1) arr.splice(idx,1); else arr.push(id);
+  render();
+}
+
+function toggleEditExposure(id){
+  const cur = WIZ.answers.exposures[id];
+  WIZ.answers.exposures[id] = (cur===true) ? false : true;
+  render();
+}
+
+function buildEditSteps(){
+  return [
+    {type:'headache'}, {type:'sleep'}, {type:'pillow'}, {type:'stress'}, {type:'water'}, {type:'caffeine'},
+    {type:'review_triggers'}, {type:'notes'}, {type:'done'}
+  ];
+}
+function startEditDay(date){
+  const log = STORE.logs[date];
+  if(!log) return;
+  WIZ = {
+    editDate: date,
+    steps: buildEditSteps(),
+    i: 0,
+    answers: {
+      headache: !!(log.headache && log.headache.had),
+      severity: log.headache && log.headache.severity,
+      onsetTime: log.headache && log.headache.onsetTime,
+      continuation: (log.headache && log.headache.continuation===null) ? undefined : (log.headache && log.headache.continuation),
+      sleepScore: log.sleepScore,
+      pillow: log.pillow,
+      stress: log.stress,
+      water: log.water,
+      caffeine: log.caffeine,
+      caffeineChange: log.caffeineChange,
+      exposures: {...(log.exposures||{})},
+      notes: log.notes || ''
+    }
+  };
+  EXPANDED_DATE = null;
+  TAB = 'checkin';
   render();
 }
 
@@ -1049,6 +1101,24 @@ async function promptAddTrigger(){
   render();
 }
 
+let EXPANDED_DATE = null;
+function toggleHistoryDetail(date){ EXPANDED_DATE = (EXPANDED_DATE===date) ? null : date; render(); }
+function renderHistoryDetail(log){
+  const yesItems = Object.keys(log.exposures||{}).filter(id=>log.exposures[id]===true)
+    .map(id=> (STORE.watchlist[id] && STORE.watchlist[id].name) || (POOL_MAP[id] && POOL_MAP[id].name) || id);
+  const noItems = Object.keys(log.exposures||{}).filter(id=>log.exposures[id]===false)
+    .map(id=> (STORE.watchlist[id] && STORE.watchlist[id].name) || (POOL_MAP[id] && POOL_MAP[id].name) || id);
+  return `<div style="padding:8px 2px 16px;border-bottom:1px solid var(--line);font-size:0.85rem;">
+    <div class="qhint" style="margin:0 0 6px;">Sleep score: ${log.sleepScore??'—'} · Pillow: ${log.pillow||'—'} · Stress: ${log.stress??'—'}/5</div>
+    <div class="qhint" style="margin:0 0 6px;">Water: ${log.water||'—'} · Caffeine: ${log.caffeine||'—'}${log.caffeineChange?' ('+log.caffeineChange+')':''}</div>
+    ${log.headache&&log.headache.had? `<div class="qhint" style="margin:0 0 6px;">Onset: ${log.headache.onsetTime||'—'}</div>` : ''}
+    <div class="qhint" style="margin:0 0 6px;"><b>Marked yes:</b> ${yesItems.length? yesItems.join(', ') : 'none'}</div>
+    ${noItems.length? `<div class="qhint" style="margin:0 0 6px;"><b>Marked no:</b> ${noItems.join(', ')}</div>` : ''}
+    ${log.notes? `<div class="qhint" style="margin:0 0 6px;"><b>Notes:</b> ${log.notes}</div>` : ''}
+    <span class="linkbtn" onclick="startEditDay('${log.date}')">Edit this day</span>
+  </div>`;
+}
+
 /* ---------------- History ---------------- */
 async function renderHistory(){
   const logs = await getAllLogs();
@@ -1070,7 +1140,9 @@ async function renderHistory(){
     <div class="sectionlabel" style="margin-top:0;">Entries</div>
     ${dates.length? dates.map(d=>{
       const l = logs[d];
-      return `<div class="histentry"><span class="d">${d}</span><span>${l.headache&&l.headache.had? '⚠ headache ('+(l.headache.severity||'')+'/10)' : 'no headache'}</span></div>`;
+      const expanded = EXPANDED_DATE===d;
+      const row = `<div class="histentry" style="cursor:pointer;" onclick="toggleHistoryDetail('${d}')"><span class="d">${d}</span><span>${l.headache&&l.headache.had? '⚠ headache ('+(l.headache.severity||'')+'/10)' : 'no headache'}</span></div>`;
+      return row + (expanded? renderHistoryDetail(l) : '');
     }).join('') : `<div class="empty">No entries yet.</div>`}
   </div>`;
 }
