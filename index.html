@@ -1134,7 +1134,22 @@ function renderHistoryDetail(log){
     ${noItems.length? `<div class="qhint" style="margin:0 0 6px;"><b>Marked no:</b> ${noItems.join(', ')}</div>` : ''}
     ${log.notes? `<div class="qhint" style="margin:0 0 6px;"><b>Notes:</b> ${log.notes}</div>` : ''}
     <span class="linkbtn" onclick="startEditDay('${log.date}')">Edit this day</span>
+    <div style="display:flex;gap:8px;margin-top:12px;align-items:center;">
+      <input type="date" id="moveDateInput-${log.date}" max="${todayStr()}" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:8px;font-family:'Inter',sans-serif;font-size:0.85rem;">
+      <div class="pill small" onclick="moveEntryToDate('${log.date}', document.getElementById('moveDateInput-${log.date}').value)">Move to this date</div>
+    </div>
   </div>`;
+}
+function moveEntryToDate(oldDate, newDate){
+  if(!newDate || newDate===oldDate) return;
+  if(STORE.logs[newDate]){
+    if(!confirm(`There's already an entry for ${newDate}. Overwrite it with this one?`)) return;
+  }
+  STORE.logs[newDate] = { ...STORE.logs[oldDate], date: newDate };
+  delete STORE.logs[oldDate];
+  persist();
+  EXPANDED_DATE = newDate;
+  render();
 }
 
 /* ---------------- History ---------------- */
