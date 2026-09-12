@@ -491,11 +491,18 @@ async function buildWizard(){
   return steps;
 }
 
-async function startCheckin(){
+async function startCheckin(dateOverride){
   const steps = await buildWizard();
-  WIZ = { steps, i:0, answers:{ exposures:{} } };
+  WIZ = { steps, i:0, answers:{ exposures:{} }, editDate: dateOverride || null };
   TAB = 'checkin';
   render();
+}
+// Entry point for "log a specific day" — routes to the full review flow if
+// that day already has an entry, or a fresh smart check-in targeting that date if not.
+function startCheckinForDate(date){
+  if(!date) return;
+  if(STORE.logs[date]) startEditDay(date);
+  else startCheckin(date);
 }
 
 function currentStep(){ return WIZ.steps[WIZ.i]; }
@@ -578,14 +585,25 @@ async function renderCheckin(){
   if(!WIZ){
     const existing = STORE.logs[today] || null;
     let head = `<header class="top"><h1>Headache Log</h1><span class="date">${today}</span></header>`;
+    const otherDayCard = `<div class="card">
+      <div class="sectionlabel" style="margin-top:0;">Filling this in late?</div>
+      <p class="qhint">If you're doing this the morning after, log it for the right day instead of today.</p>
+      <div class="pillrow">
+        <div class="pill" onclick="startCheckinForDate('${yesterdayStr()}')">Log yesterday (${yesterdayStr()})</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;">
+        <input type="date" id="pickDateInput" max="${todayStr()}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:10px;font-family:'Inter',sans-serif;font-size:0.9rem;">
+        <div class="pill small" onclick="startCheckinForDate(document.getElementById('pickDateInput').value)">Go</div>
+      </div>
+    </div>`;
     if(existing){
       return head + `<div class="card"><p class="qtitle">Already logged today</p>
         <p class="qhint">You checked in for today${existing.headache.had?' — headache noted.':' — no headache noted.'}</p>
-        <button class="primary" onclick="startCheckin()">Log again / edit</button></div>` + await quickStats();
+        <button class="primary" onclick="startCheckin()">Log again / edit</button></div>` + otherDayCard + await quickStats();
     }
     return head + `<div class="card"><p class="qtitle">Evening check-in</p>
       <p class="qhint">About 3 minutes. A handful of quick taps — no typing required.</p>
-      <button class="primary" onclick="startCheckin()">Start check-in</button></div>` + await quickStats();
+      <button class="primary" onclick="startCheckin()">Start check-in</button></div>` + otherDayCard + await quickStats();
   }
 
   const step = currentStep();
@@ -680,8 +698,8 @@ async function renderCheckin(){
       return `<header class="top"><h1>${isEdit?'Edit entry':'Headache Log'}</h1><span class="date">${today}</span></header><div class="card">${body}</div>`;
     }
     const doneAction = isEdit ? `WIZ=null;EXPANDED_DATE='${today}';setTab('history')` : `WIZ=null;setTab('checkin')`;
-    body = `<p class="qtitle">${isEdit?'Updated':'Logged'} for ${today} ✓</p>
-      <p class="qhint">${isEdit? 'Your entry has been corrected.' : (WIZ.answers.headache ? 'Sorry you had a headache today.' : 'No headache — good.') + ' Thanks for taking three minutes for this.'} Saved automatically on this device.</p>
+    body = `<p class="qtitle">Logged for ${today} ✓</p>
+      <p class="qhint">${isEdit? 'Saved for that day.' : (WIZ.answers.headache ? 'Sorry you had a headache today.' : 'No headache — good.') + ' Thanks for taking three minutes for this.'} Saved automatically on this device.</p>
       ${changes.length? `<div class="summarybox">${changes.map(c=>`<div>• ${c}</div>`).join('')}</div>` : ''}
       <button class="primary" style="margin-top:18px;" onclick="${doneAction}">Done</button>`;
     return `<header class="top"><h1>${isEdit?'Edit entry':'Headache Log'}</h1><span class="date">${today}</span></header>${body}`;
