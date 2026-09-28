@@ -567,7 +567,7 @@ async function finishCheckin(){
   const log = {
     date,
     headache: a.headache ? {had:true, severity:sevNum, onsetSinceWake:a.onsetSinceWake||null, onsetTime:a.onsetTime||'',
-      continuation: a.continuation===undefined? null : a.continuation, meds: a.meds||[], medHelped: a.medHelped||null} : {had:false},
+      continuation: a.continuation===undefined? null : a.continuation, meds: a.meds||[], medHelped: a.medHelped||null, endedHow: a.endedHow||null} : {had:false},
     sleepScore: a.sleepScore, pillow: a.pillow, trip: a.trip||null,
     stress: a.stress, water: a.water, caffeine: a.caffeine, caffeineChange: a.caffeineChange,
     notes: a.notes || ''
@@ -707,9 +707,12 @@ async function renderCheckin(){
           ${medOpts.map(m=>pill(m, Array.isArray(meds) && meds.includes(m), `toggleMed('${m}')`)).join('')}
         </div>`;
       if(Array.isArray(meds) && meds.length>0){
-        body += `<p class="qtitle" style="margin-top:18px;font-size:1.05rem;">Did it help?</p>
+        body += `<p class="qtitle" style="margin-top:18px;font-size:1.05rem;">What did it do?</p>
           <p class="qhint" style="margin:0 0 8px;">Put doses and timing in the notes at the end if you want them on record.</p>
-          <div class="pillrow">${['Yes','Partly','No'].map(v=>pill(v, WIZ.answers.medHelped===v, `setAns('medHelped','${v}')`)).join('')}</div>`;
+          <div class="pillrow">${['Gone completely','Eased, not gone','No change','Cleared, then came back'].map(v=>pill(v, WIZ.answers.medHelped===v, `setAns('medHelped','${v}')`)).join('')}</div>`;
+      } else if(Array.isArray(meds) && meds.length===0){
+        body += `<p class="qtitle" style="margin-top:18px;font-size:1.05rem;">How did it end?</p>
+          <div class="pillrow">${['Faded on its own','Still there at bedtime'].map(v=>pill(v, WIZ.answers.endedHow===v, `setAns('endedHow','${v}')`)).join('')}</div>`;
       }
     }
   } else if(step.type==='sleep'){
@@ -816,7 +819,8 @@ function stepIsAnswered(step){
     const fresh = Array.isArray(a.checklist);           // false when editing an older entry
     const onsetOk = !!a.onsetSinceWake || (!fresh && !!a.onsetTime);
     const medsOk = !fresh || Array.isArray(a.meds);
-    const helpOk = !fresh || !(Array.isArray(a.meds) && a.meds.length>0) || !!a.medHelped;
+    const took = Array.isArray(a.meds) && a.meds.length>0;
+    const helpOk = !fresh || (took ? !!a.medHelped : (!Array.isArray(a.meds) || !!a.endedHow));
     return !!a.severity && onsetOk && medsOk && helpOk && (!hadHeadacheYesterday() || a.continuation!==undefined);
   }
   if(step.type==='trip') return !!a.trip || !Array.isArray(a.checklist);
@@ -848,12 +852,13 @@ function toggleChecklist(id){
   if(idx>-1) arr.splice(idx,1); else arr.push(id);
   render();
 }
-function setMeds(arr){ WIZ.answers.meds = arr; if(arr.length===0) WIZ.answers.medHelped = undefined; render(); }
+function setMeds(arr){ WIZ.answers.meds = arr; WIZ.answers.medHelped = undefined; WIZ.answers.endedHow = undefined; render(); }
 function toggleMed(m){
   const cur = Array.isArray(WIZ.answers.meds) ? WIZ.answers.meds.slice() : [];
   const i = cur.indexOf(m); if(i>-1) cur.splice(i,1); else cur.push(m);
   WIZ.answers.meds = cur;
   if(cur.length===0) WIZ.answers.medHelped = undefined;
+  WIZ.answers.endedHow = undefined;
   render();
 }
 function setMinSeverity(n){ STORE.settings.minSeverity = n; persist(); render(); }
@@ -884,6 +889,7 @@ function startEditDay(date){
       onsetSinceWake: (log.headache && log.headache.onsetSinceWake) || undefined,
       meds: (log.headache && Array.isArray(log.headache.meds)) ? log.headache.meds : undefined,
       medHelped: (log.headache && log.headache.medHelped) || undefined,
+      endedHow: (log.headache && log.headache.endedHow) || undefined,
       trip: log.trip || undefined,
       continuation: (log.headache && log.headache.continuation===null) ? undefined : (log.headache && log.headache.continuation),
       sleepScore: log.sleepScore,
@@ -992,13 +998,16 @@ function renderMedCard(entries){
   const usedOn = l => !!((l.headache && Array.isArray(l.headache.meds) && l.headache.meds.length) || (l.exposures && l.exposures.pain_reliever===true));
   const medDays = recent.filter(usedOn);
   if(entries.length<3) return '';
-  const helped = {Yes:0, Partly:0, No:0};
-  medDays.forEach(l=>{ const h=l.headache && l.headache.medHelped; if(h && helped[h]!==undefined) helped[h]++; });
-  const hasHelp = helped.Yes+helped.Partly+helped.No>0;
+  const legacy = {Yes:'Gone completely', Partly:'Eased, not gone', No:'No change'};
+  const helped = {'Gone completely':0, 'Eased, not gone':0, 'No change':0, 'Cleared, then came back':0};
+  medDays.forEach(l=>{ let h=l.headache && l.headache.medHelped; h = legacy[h] || h; if(h && helped[h]!==undefined) helped[h]++; });
+  const hasHelp = Object.values(helped).reduce((a,b)=>a+b,0)>0;
+  const own = entries.filter(l=>l.headache && l.headache.had && l.headache.endedHow==='Faded on its own').length;
   return `<div class="card">
     <div class="sectionlabel" style="margin-top:0;">Pain relievers</div>
     <div class="trigrow"><div class="name">Days with one, last 30 days</div><div class="rate">${medDays.length}</div></div>
-    ${hasHelp? `<div class="trigrow"><div class="name">Did it help?</div><div class="rate">${helped.Yes} yes · ${helped.Partly} partly · ${helped.No} no</div></div>` : ''}
+    ${hasHelp? `<div class="trigrow"><div class="name">What it did</div><div class="rate">${helped['Gone completely']} gone · ${helped['Eased, not gone']} eased · ${helped['No change']} no change · ${helped['Cleared, then came back']} came back</div></div>` : ''}
+    ${own? `<div class="trigrow"><div class="name">Untreated, faded on their own</div><div class="rate">${own}</div></div>` : ''}
     <p class="qhint" style="margin-top:8px;">Regular use on roughly 15+ days a month (about 10+ for combination products) is where medication-overuse headache becomes a concern. ${medDays.length>=10? 'Worth raising with your doctor.' : 'You are well under that.'}</p>
   </div>`;
 }
@@ -1305,7 +1314,7 @@ function renderHistoryDetail(log){
     <div class="qhint" style="margin:0 0 6px;">Sleep score: ${log.sleepScore??'—'} · Pillow: ${log.pillow||'—'} · Stress: ${log.stress??'—'}/5</div>
     <div class="qhint" style="margin:0 0 6px;">Water: ${log.water||'—'} · Caffeine: ${log.caffeine||'—'}${log.caffeineChange?' ('+log.caffeineChange+')':''}</div>
     ${tripLbl? `<div class="qhint" style="margin:0 0 6px;">Trip: ${tripLbl}</div>` : ''}
-    ${h.had? `<div class="qhint" style="margin:0 0 6px;">Started: ${onsetLbl}${(h.meds&&h.meds.length)? ' · Took: '+h.meds.join(', ')+(h.medHelped?' (helped: '+h.medHelped.toLowerCase()+')':'') : ''}</div>` : ''}
+    ${h.had? `<div class="qhint" style="margin:0 0 6px;">Started: ${onsetLbl}${(h.meds&&h.meds.length)? ' · Took: '+h.meds.join(', ')+(h.medHelped?' ('+({Yes:'gone completely',Partly:'eased, not gone',No:'no change'}[h.medHelped]||h.medHelped.toLowerCase())+')':'') : (h.endedHow? ' · Ended: '+h.endedHow.toLowerCase() : '')}</div>` : ''}
     <div class="qhint" style="margin:0 0 6px;"><b>Marked yes:</b> ${yesItems.length? yesItems.join(', ') : 'none'}</div>
     ${noItems.length? (noItems.length<=8? `<div class="qhint" style="margin:0 0 6px;"><b>Marked no:</b> ${noItems.join(', ')}</div>` : `<div class="qhint" style="margin:0 0 6px;"><b>Marked no:</b> ${noItems.length} other items</div>`) : ''}
     ${log.notes? `<div class="qhint" style="margin:0 0 6px;"><b>Notes:</b> ${log.notes}</div>` : ''}
@@ -1394,7 +1403,7 @@ async function exportCSV(){
   const idSet = new Set(Object.keys(STORE.watchlist));
   Object.values(logs).forEach(l=>Object.keys(l.exposures||{}).forEach(id=>idSet.add(id)));
   const trigIds = [...idSet];
-  const headers = ['date','headache','severity','onsetSinceWake','onsetTime','continuation','meds','medHelped','trip','sleepScore','pillow','stress','water','caffeine','caffeineChange',...trigIds,'notes'];
+  const headers = ['date','headache','severity','onsetSinceWake','onsetTime','continuation','meds','medHelped','endedHow','trip','sleepScore','pillow','stress','water','caffeine','caffeineChange',...trigIds,'notes'];
   const q = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
   const rows = [headers.join(',')];
   Object.keys(logs).sort().forEach(d=>{
@@ -1402,7 +1411,7 @@ async function exportCSV(){
     const row = [
       d, h.had?'yes':'no', h.severity||'', h.onsetSinceWake||'', h.onsetTime||'',
       h.continuation===true?'continuing': h.continuation===false?'new':'',
-      q((h.meds||[]).join('; ')), h.medHelped||'', l.trip||'',
+      q((h.meds||[]).join('; ')), q(h.medHelped||''), q(h.endedHow||''), l.trip||'',
       l.sleepScore??'', q(l.pillow||''), l.stress||'', l.water||'', l.caffeine||'', l.caffeineChange||'',
       ...trigIds.map(id=> l.exposures && l.exposures[id]===true?'yes': l.exposures && l.exposures[id]===false?'no':''),
       q(l.notes||'')
